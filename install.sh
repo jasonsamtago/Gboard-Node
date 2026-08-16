@@ -18,7 +18,19 @@ BINARY_PATH="/usr/local/bin/gboard-node"
 SERVICE_NAME="gboard-node.service"
 SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}"
 CLI_PATH="/usr/local/bin/gbctl"
+CLI_PATH_USR_BIN="/usr/bin/gbctl"
 INSTALLER_COPY_PATH="${INSTALL_ROOT}/install.sh"
+
+# One-release compat: existing xboard-node hosts are migrated in place.
+# Do not treat a generic "xboard" string as a brand path.
+LEGACY_INSTALL_ROOT="/etc/xboard-node"
+LEGACY_CONFIG_FILE="${LEGACY_INSTALL_ROOT}/config.yml"
+LEGACY_INSTALL_META="${LEGACY_INSTALL_ROOT}/install-meta.json"
+LEGACY_BINARY_PATH="/usr/local/bin/xboard-node"
+LEGACY_SERVICE_NAME="xboard-node.service"
+LEGACY_SERVICE_PATH="/etc/systemd/system/${LEGACY_SERVICE_NAME}"
+LEGACY_CLI_PATH="/usr/local/bin/xbctl"
+LEGACY_CLI_PATH_USR_BIN="/usr/bin/xbctl"
 CLI_BINARY_SOURCE=""
 DEFAULT_HEALTH_PORT=65530
 DEFAULT_KERNEL="singbox"
@@ -79,6 +91,8 @@ load_health_port_from_config() {
     local parsed
     if [ -x "$CLI_PATH" ]; then
         parsed=$("$CLI_PATH" config health-port --config "$cfg_path" 2>/dev/null)
+    elif [ -x "$LEGACY_CLI_PATH" ]; then
+        parsed=$("$LEGACY_CLI_PATH" config health-port --config "$cfg_path" 2>/dev/null)
     else
         parsed=$(grep -m1 'health_port:' "$cfg_path" 2>/dev/null | sed 's/.*health_port:[[:space:]]*//' | tr -cd '0-9')
     fi
@@ -117,9 +131,12 @@ rollback_install() {
         fi
         if [ -f "$BACKUP_PATH/gbctl" ]; then
             install -m 755 "$BACKUP_PATH/gbctl" "$CLI_PATH"
+        elif [ -f "$BACKUP_PATH/xbctl" ]; then
+            install -m 755 "$BACKUP_PATH/xbctl" "$CLI_PATH"
         else
             rm -f "$CLI_PATH"
         fi
+        install_cli_compat_symlinks
         if [ -f "$BACKUP_PATH/${SERVICE_NAME}" ]; then
             install -m 644 "$BACKUP_PATH/${SERVICE_NAME}" "$SERVICE_PATH"
         else
@@ -195,6 +212,11 @@ usage() {
     --force-reconfigure Overwrite an existing install even if mode/target changed
     --purge             With uninstall, delete /etc/gboard-node too
     --yes, -y           Non-interactive confirmation for destructive operations
+
+  COMPAT:
+    Existing /etc/xboard-node installs are migrated to /etc/gboard-node
+    automatically on install, upgrade, status, and service commands.
+    xbctl remains a symlink to gbctl for one release.
 
   EXAMPLES:
     sudo bash install.sh --panel https://panel.example.com --token TOKEN --node-id 1
@@ -399,6 +421,161 @@ ensure_dirs() {
     chmod 700 "$INSTALL_ROOT"
 }
 
+is_root() {
+    [ "$(id -u)" -eq 0 ]
+}
+
+rewrite_legacy_paths_in_file() {
+    local f="$1"
+    [ -f "$f" ] || return 0
+    # Case-sensitive install-root rewrite only. Do not touch generic "xboard".
+    if grep -q '/etc/xboard-node' "$f" 2>/dev/null; then
+        sed -i 's|/etc/xboard-node|/etc/gboard-node|g' "$f"
+    fi
+}
+
+rewrite_legacy_paths_in_tree() {
+    local root="$1"
+    [ -d "$root" ] || return 0
+    rewrite_legacy_paths_in_file "$root/config.yml"
+    rewrite_legacy_paths_in_file "$root/install-meta.json"
+    rewrite_legacy_paths_in_file "$root/credentials.env"
+    if [ -d "$root/instances" ]; then
+        local f
+        while IFS= read -r -d '' f; do
+            rewrite_legacy_paths_in_file "$f"
+        done < <(find "$root/instances" -type f \( -name '*.yml' -o -name '*.yaml' -o -name '*.json' \) -print0 2>/dev/null)
+    fi
+}
+
+# Move /etc/xboard-node → /etc/gboard-node when the new tree is absent.
+# If both exist, prefer the new tree and leave the old directory alone.
+migrate_legacy_layout() {
+    if [ -d "$LEGACY_INSTALL_ROOT" ] && [ ! -e "$INSTALL_ROOT" ]; then
+        log_step "Migrating ${LEGACY_INSTALL_ROOT} -> ${INSTALL_ROOT}"
+        if systemctl is-active "$LEGACY_SERVICE_NAME" >/dev/null 2>&1; then
+            systemctl stop "$LEGACY_SERVICE_NAME" >/dev/null 2>&1 || true
+        fi
+        if mv "$LEGACY_INSTALL_ROOT" "$INSTALL_ROOT"; then
+            :
+        else
+            log_warn "Rename failed, copying ${LEGACY_INSTALL_ROOT} to ${INSTALL_ROOT}"
+            cp -a "$LEGACY_INSTALL_ROOT" "$INSTALL_ROOT"
+            rm -rf "$LEGACY_INSTALL_ROOT"
+        fi
+        chmod 700 "$INSTALL_ROOT" 2>/dev/null || true
+        rewrite_legacy_paths_in_tree "$INSTALL_ROOT"
+        log_info "Moved install data to ${INSTALL_ROOT}"
+    elif [ -d "$LEGACY_INSTALL_ROOT" ] && [ -e "$INSTALL_ROOT" ]; then
+        log_warn "Both ${INSTALL_ROOT} and ${LEGACY_INSTALL_ROOT} exist; using ${INSTALL_ROOT} and leaving the old tree in place"
+        rewrite_legacy_paths_in_tree "$INSTALL_ROOT"
+    elif [ -d "$INSTALL_ROOT" ]; then
+        rewrite_legacy_paths_in_tree "$INSTALL_ROOT"
+    fi
+}
+
+write_service_unit() {
+    local dest="$1"
+    cat >"$dest" <<EOF_UNIT
+[Unit]
+Description=Gboard Node Backend
+Documentation=https://github.com/jasonsamtago/Gboard-Node
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=${INSTALL_ROOT}
+EnvironmentFile=-${CREDENTIALS_FILE}
+ExecStart=${BINARY_PATH} -c ${CONFIG_FILE}
+Restart=always
+RestartSec=5
+LimitNOFILE=1048576
+NoNewPrivileges=true
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF_UNIT
+}
+
+install_cli_compat_symlinks() {
+    if [ ! -x "$CLI_PATH" ]; then
+        return 0
+    fi
+    ln -sfn "$CLI_PATH" "$CLI_PATH_USR_BIN" 2>/dev/null || true
+    # One-release compatibility so existing xbctl scripts keep working.
+    ln -sfn "$CLI_PATH" "$LEGACY_CLI_PATH" 2>/dev/null || true
+    ln -sfn "$CLI_PATH" "$LEGACY_CLI_PATH_USR_BIN" 2>/dev/null || true
+}
+
+# Promote old binaries/unit to gboard-node names, then drop the old artifacts.
+# xbctl is kept as a symlink to gbctl.
+retire_legacy_runtime() {
+    if [ ! -x "$BINARY_PATH" ] && [ -x "$LEGACY_BINARY_PATH" ]; then
+        log_info "Installing ${BINARY_PATH} from ${LEGACY_BINARY_PATH}"
+        install -m 755 "$LEGACY_BINARY_PATH" "$BINARY_PATH"
+    fi
+    if [ ! -x "$CLI_PATH" ]; then
+        if [ -x "$LEGACY_CLI_PATH" ] && [ ! -L "$LEGACY_CLI_PATH" ]; then
+            install -m 755 "$LEGACY_CLI_PATH" "$CLI_PATH"
+        elif [ -x "$LEGACY_CLI_PATH_USR_BIN" ] && [ ! -L "$LEGACY_CLI_PATH_USR_BIN" ]; then
+            install -m 755 "$LEGACY_CLI_PATH_USR_BIN" "$CLI_PATH"
+        fi
+    fi
+
+    local legacy_active=0
+    if systemctl is-active "$LEGACY_SERVICE_NAME" >/dev/null 2>&1; then
+        legacy_active=1
+    fi
+    if [ -f "$LEGACY_SERVICE_PATH" ] || [ "$legacy_active" -eq 1 ]; then
+        systemctl stop "$LEGACY_SERVICE_NAME" >/dev/null 2>&1 || true
+        systemctl disable "$LEGACY_SERVICE_NAME" >/dev/null 2>&1 || true
+    fi
+
+    if [ ! -f "$SERVICE_PATH" ] && [ -x "$BINARY_PATH" ] && [ -f "$CONFIG_FILE" ]; then
+        local unit_tmp
+        unit_tmp=$(mktemp)
+        write_service_unit "$unit_tmp"
+        install -m 644 "$unit_tmp" "$SERVICE_PATH"
+        rm -f "$unit_tmp"
+    fi
+
+    if [ -f "$SERVICE_PATH" ]; then
+        systemctl daemon-reload || true
+        systemctl enable "$SERVICE_NAME" >/dev/null 2>&1 || true
+        if [ "$legacy_active" -eq 1 ]; then
+            systemctl reset-failed "$SERVICE_NAME" >/dev/null 2>&1 || true
+            systemctl start "$SERVICE_NAME" >/dev/null 2>&1 || true
+        fi
+    fi
+
+    if [ -f "$LEGACY_SERVICE_PATH" ]; then
+        rm -f "$LEGACY_SERVICE_PATH"
+        systemctl daemon-reload || true
+    fi
+
+    if [ -e "$LEGACY_BINARY_PATH" ] && [ "$LEGACY_BINARY_PATH" != "$BINARY_PATH" ]; then
+        rm -f "$LEGACY_BINARY_PATH"
+    fi
+
+    install_cli_compat_symlinks
+}
+
+# with_runtime=runtime also switches the systemd unit and binaries.
+# with_runtime=layout only moves the config tree (used by uninstall).
+maybe_migrate_legacy_install() {
+    local with_runtime="${1:-runtime}"
+    if ! is_root; then
+        return 0
+    fi
+    migrate_legacy_layout
+    if [ "$with_runtime" = "runtime" ]; then
+        retire_legacy_runtime
+    fi
+}
+
 validate_positive_int() {
     local label="$1"
     local value="$2"
@@ -443,9 +620,15 @@ validate_install_request() {
 
 detect_current_state() {
     local has_binary=0 has_config=0 has_service=0
-    [ -x "$BINARY_PATH" ] && has_binary=1
-    [ -f "$CONFIG_FILE" ] && has_config=1
-    [ -f "$SERVICE_PATH" ] && has_service=1
+    if [ -x "$BINARY_PATH" ] || [ -x "$LEGACY_BINARY_PATH" ]; then
+        has_binary=1
+    fi
+    if [ -f "$CONFIG_FILE" ] || [ -f "$LEGACY_CONFIG_FILE" ]; then
+        has_config=1
+    fi
+    if [ -f "$SERVICE_PATH" ] || [ -f "$LEGACY_SERVICE_PATH" ]; then
+        has_service=1
+    fi
 
     if [ "$has_binary" -eq 0 ] && [ "$has_config" -eq 0 ] && [ "$has_service" -eq 0 ]; then
         CURRENT_STATE="fresh"
@@ -602,28 +785,7 @@ render_config() {
 }
 
 render_service() {
-    cat >"$TMP_DIR/${SERVICE_NAME}" <<EOF_UNIT
-[Unit]
-Description=Gboard Node Backend
-Documentation=https://github.com/jasonsamtago/Gboard-Node
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-WorkingDirectory=${INSTALL_ROOT}
-EnvironmentFile=-${CREDENTIALS_FILE}
-ExecStart=${BINARY_PATH} -c ${CONFIG_FILE}
-Restart=always
-RestartSec=5
-LimitNOFILE=1048576
-NoNewPrivileges=true
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-EOF_UNIT
+    write_service_unit "$TMP_DIR/${SERVICE_NAME}"
 }
 
 backup_existing_state() {
@@ -631,22 +793,42 @@ backup_existing_state() {
     mkdir -p "$BACKUP_PATH"
     if [ -x "$BINARY_PATH" ]; then
         cp "$BINARY_PATH" "$BACKUP_PATH/gboard-node"
+    elif [ -x "$LEGACY_BINARY_PATH" ]; then
+        cp "$LEGACY_BINARY_PATH" "$BACKUP_PATH/gboard-node"
     fi
     if [ -x "$CLI_PATH" ]; then
         cp "$CLI_PATH" "$BACKUP_PATH/gbctl"
+    elif [ -x "$LEGACY_CLI_PATH" ] && [ ! -L "$LEGACY_CLI_PATH" ]; then
+        cp "$LEGACY_CLI_PATH" "$BACKUP_PATH/gbctl"
     fi
     if [ -f "$CONFIG_FILE" ]; then
         cp "$CONFIG_FILE" "$BACKUP_PATH/config.yml"
+    elif [ -f "$LEGACY_CONFIG_FILE" ]; then
+        cp "$LEGACY_CONFIG_FILE" "$BACKUP_PATH/config.yml"
     fi
     if [ -f "$CREDENTIALS_FILE" ]; then
         cp "$CREDENTIALS_FILE" "$BACKUP_PATH/credentials.env"
+    elif [ -f "${LEGACY_INSTALL_ROOT}/credentials.env" ]; then
+        cp "${LEGACY_INSTALL_ROOT}/credentials.env" "$BACKUP_PATH/credentials.env"
     fi
     if [ -f "$INSTALL_META" ]; then
         cp "$INSTALL_META" "$BACKUP_PATH/install-meta.json"
+    elif [ -f "$LEGACY_INSTALL_META" ]; then
+        cp "$LEGACY_INSTALL_META" "$BACKUP_PATH/install-meta.json"
     fi
     if [ -f "$SERVICE_PATH" ]; then
         cp "$SERVICE_PATH" "$BACKUP_PATH/${SERVICE_NAME}"
         SERVICE_EXISTED=1
+    elif [ -f "$LEGACY_SERVICE_PATH" ]; then
+        SERVICE_EXISTED=1
+        if [ -n "${TMP_DIR:-}" ] && [ -f "$TMP_DIR/${SERVICE_NAME}" ]; then
+            cp "$TMP_DIR/${SERVICE_NAME}" "$BACKUP_PATH/${SERVICE_NAME}"
+        else
+            sed -e 's|/usr/local/bin/xboard-node|/usr/local/bin/gboard-node|g' \
+                -e 's|/etc/xboard-node|/etc/gboard-node|g' \
+                -e 's|Xboard Node Backend|Gboard Node Backend|g' \
+                "$LEGACY_SERVICE_PATH" > "$BACKUP_PATH/${SERVICE_NAME}"
+        fi
     else
         SERVICE_EXISTED=0
     fi
@@ -655,6 +837,9 @@ backup_existing_state() {
 stop_existing_service() {
     if [ -f "$SERVICE_PATH" ] || systemctl is-active "$SERVICE_NAME" >/dev/null 2>&1; then
         systemctl stop "$SERVICE_NAME" >/dev/null 2>&1 || true
+    fi
+    if [ -f "$LEGACY_SERVICE_PATH" ] || systemctl is-active "$LEGACY_SERVICE_NAME" >/dev/null 2>&1; then
+        systemctl stop "$LEGACY_SERVICE_NAME" >/dev/null 2>&1 || true
     fi
 }
 
@@ -668,8 +853,8 @@ install_staged_files() {
         install -m 755 "$0" "$INSTALLER_COPY_PATH"
     fi
     install -m 755 "$TMP_DIR/gbctl" "$CLI_PATH"
-    ln -sf "$CLI_PATH" /usr/bin/gbctl 2>/dev/null || true
     install -m 644 "$TMP_DIR/${SERVICE_NAME}" "$SERVICE_PATH"
+    retire_legacy_runtime
     systemctl daemon-reload
     systemctl enable "$SERVICE_NAME" > /dev/null 2>&1
 }
@@ -717,6 +902,7 @@ start_service() {
 
 perform_install() {
     validate_install_request
+    maybe_migrate_legacy_install layout
     detect_current_state
     require_reconfigure_confirmation
     TMP_DIR=$(mktemp -d)
@@ -740,6 +926,7 @@ perform_install() {
 }
 
 perform_upgrade() {
+    maybe_migrate_legacy_install layout
     detect_current_state
     if [ "$CURRENT_STATE" = "fresh" ]; then
         log_warn "No existing install found; falling back to install"
@@ -752,10 +939,11 @@ perform_upgrade() {
     stage_gbctl
     render_service
     backup_existing_state
+    stop_existing_service
     install -m 755 "$TMP_DIR/gboard-node" "$BINARY_PATH"
     install -m 755 "$TMP_DIR/gbctl" "$CLI_PATH"
-    ln -sf "$CLI_PATH" /usr/bin/gbctl 2>/dev/null || true
     install -m 644 "$TMP_DIR/${SERVICE_NAME}" "$SERVICE_PATH"
+    retire_legacy_runtime
     systemctl daemon-reload
     systemctl restart "$SERVICE_NAME"
     if ! wait_for_health; then
@@ -779,48 +967,80 @@ confirm_uninstall() {
 }
 
 perform_uninstall() {
+    maybe_migrate_legacy_install layout
     confirm_uninstall
-    if [ -f "$SERVICE_PATH" ]; then
+    if [ -f "$SERVICE_PATH" ] || [ -f "$LEGACY_SERVICE_PATH" ] \
+        || systemctl is-active "$SERVICE_NAME" >/dev/null 2>&1 \
+        || systemctl is-active "$LEGACY_SERVICE_NAME" >/dev/null 2>&1; then
         systemctl stop "$SERVICE_NAME" >/dev/null 2>&1 || true
+        systemctl stop "$LEGACY_SERVICE_NAME" >/dev/null 2>&1 || true
         systemctl disable "$SERVICE_NAME" >/dev/null 2>&1 || true
-        rm -f "$SERVICE_PATH"
+        systemctl disable "$LEGACY_SERVICE_NAME" >/dev/null 2>&1 || true
+        rm -f "$SERVICE_PATH" "$LEGACY_SERVICE_PATH"
         systemctl daemon-reload || true
     fi
-    rm -f "$BINARY_PATH"
-    rm -f "$CLI_PATH"
-    rm -f /usr/bin/gbctl 2>/dev/null || true
+    rm -f "$BINARY_PATH" "$LEGACY_BINARY_PATH"
+    rm -f "$CLI_PATH" "$CLI_PATH_USR_BIN"
+    rm -f "$LEGACY_CLI_PATH" "$LEGACY_CLI_PATH_USR_BIN"
     if [ "$PURGE" -eq 1 ]; then
-        rm -rf "$INSTALL_ROOT"
+        rm -rf "$INSTALL_ROOT" "$LEGACY_INSTALL_ROOT"
         log_info "Removed ${INSTALL_ROOT}"
     else
-        rm -f "$INSTALL_META"
-        log_info "Config preserved under ${INSTALL_ROOT}"
+        rm -f "$INSTALL_META" "$LEGACY_INSTALL_META"
+        if [ -d "$INSTALL_ROOT" ]; then
+            log_info "Config preserved under ${INSTALL_ROOT}"
+        elif [ -d "$LEGACY_INSTALL_ROOT" ]; then
+            log_info "Config preserved under ${LEGACY_INSTALL_ROOT}"
+        fi
     fi
     log_info "Uninstall complete"
 }
 
 perform_status() {
+    maybe_migrate_legacy_install runtime
     detect_current_state
     echo
     echo -e "${BOLD}gboard-node install status${NC}"
     echo "  state:   ${CURRENT_STATE}"
-    if [ -f "$INSTALL_META" ]; then
-        echo "  meta:    ${INSTALL_META}"
-        if [ -x "$CLI_PATH" ]; then
-            "$CLI_PATH" list 2>/dev/null || true
+    local meta="$INSTALL_META"
+    local cfg="$CONFIG_FILE"
+    local svc="$SERVICE_NAME"
+    local cli="$CLI_PATH"
+    if [ ! -f "$meta" ] && [ -f "$LEGACY_INSTALL_META" ]; then
+        meta="$LEGACY_INSTALL_META"
+    fi
+    if [ ! -f "$cfg" ] && [ -f "$LEGACY_CONFIG_FILE" ]; then
+        cfg="$LEGACY_CONFIG_FILE"
+    fi
+    if [ ! -f "$SERVICE_PATH" ] && [ -f "$LEGACY_SERVICE_PATH" ]; then
+        svc="$LEGACY_SERVICE_NAME"
+    fi
+    if [ ! -x "$cli" ] && [ -x "$LEGACY_CLI_PATH" ]; then
+        cli="$LEGACY_CLI_PATH"
+    fi
+    if [ -f "$cfg" ]; then
+        echo "  config:  ${cfg}"
+    fi
+    if [ -f "$meta" ]; then
+        echo "  meta:    ${meta}"
+        if [ -x "$cli" ]; then
+            "$cli" list 2>/dev/null || true
         else
             # Simple key extraction from JSON (no Python needed)
             local val
             for key in config_mode version latest_instance_id instance_count updated_at; do
-                val=$(sed -n "s/.*\"${key}\": *\"\{0,1\}\([^\"]*\)\"\{0,1\}.*/\1/p" "$INSTALL_META" | head -1)
+                val=$(sed -n "s/.*\"${key}\": *\"\{0,1\}\([^\"]*\)\"\{0,1\}.*/\1/p" "$meta" | head -1)
                 val="${val%,}"  # strip trailing comma from numeric JSON values
                 [ -n "$val" ] && echo "  ${key}: ${val}"
             done
         fi
     fi
-    if [ -f "$SERVICE_PATH" ]; then
-        echo "  service: ${SERVICE_NAME}"
-        systemctl status "$SERVICE_NAME" --no-pager || true
+    if [ -f "$SERVICE_PATH" ] || [ -f "$LEGACY_SERVICE_PATH" ]; then
+        echo "  service: ${svc}"
+        systemctl status "$svc" --no-pager || true
+    fi
+    if [ -d "$LEGACY_INSTALL_ROOT" ] && [ -d "$INSTALL_ROOT" ]; then
+        echo "  leftover: ${LEGACY_INSTALL_ROOT} (not removed; ${INSTALL_ROOT} is active)"
     fi
 }
 
@@ -862,4 +1082,6 @@ main() {
     esac
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

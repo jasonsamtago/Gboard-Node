@@ -44,9 +44,11 @@ curl -fsSL https://raw.githubusercontent.com/jasonsamtago/Gboard-Node/dev/instal
 
 ```
 
+Existing `xboard-node` hosts are migrated in place: `/etc/xboard-node` becomes `/etc/gboard-node`, `xboard-node.service` becomes `gboard-node.service`, and `xbctl` is left as a symlink to `gbctl` for one release. Run the new `install.sh` or `gbctl upgrade` (or `gbctl status` as root) on the old box — no uninstall required.
+
 ## gbctl
 
-Run `gbctl` after installation for help. Common commands:
+Run `gbctl` after installation for help. `xbctl` still works as a symlink. Common commands:
 
 ```bash
 gbctl list                          # list all instances

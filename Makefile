@@ -24,7 +24,7 @@ build-all: build-linux build-linux-arm64
 
 # Run tests
 test:
-	go test -v -race -count=1 ./internal/...
+	go test -v -race -count=1 ./internal/... ./cmd/gbctl
 
 # Clean build artifacts
 clean:
