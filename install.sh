@@ -8,16 +8,16 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-APP_NAME="xboard-node"
-INSTALL_ROOT="/etc/xboard-node"
+APP_NAME="gboard-node"
+INSTALL_ROOT="/etc/gboard-node"
 BACKUP_DIR="${INSTALL_ROOT}/backups"
 INSTALL_META="${INSTALL_ROOT}/install-meta.json"
 CONFIG_FILE="${INSTALL_ROOT}/config.yml"
 CREDENTIALS_FILE="${INSTALL_ROOT}/credentials.env"
-BINARY_PATH="/usr/local/bin/xboard-node"
-SERVICE_NAME="xboard-node.service"
+BINARY_PATH="/usr/local/bin/gboard-node"
+SERVICE_NAME="gboard-node.service"
 SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}"
-CLI_PATH="/usr/local/bin/xbctl"
+CLI_PATH="/usr/local/bin/gbctl"
 INSTALLER_COPY_PATH="${INSTALL_ROOT}/install.sh"
 CLI_BINARY_SOURCE=""
 DEFAULT_HEALTH_PORT=65530
@@ -95,8 +95,8 @@ load_health_port_from_config() {
 rollback_install() {
     log_warn "Rolling back installation"
     if [ -n "$BACKUP_PATH" ] && [ -d "$BACKUP_PATH" ]; then
-        if [ -f "$BACKUP_PATH/xboard-node" ]; then
-            install -m 755 "$BACKUP_PATH/xboard-node" "$BINARY_PATH"
+        if [ -f "$BACKUP_PATH/gboard-node" ]; then
+            install -m 755 "$BACKUP_PATH/gboard-node" "$BINARY_PATH"
         else
             rm -f "$BINARY_PATH"
         fi
@@ -115,8 +115,8 @@ rollback_install() {
         else
             rm -f "$INSTALL_META"
         fi
-        if [ -f "$BACKUP_PATH/xbctl" ]; then
-            install -m 755 "$BACKUP_PATH/xbctl" "$CLI_PATH"
+        if [ -f "$BACKUP_PATH/gbctl" ]; then
+            install -m 755 "$BACKUP_PATH/gbctl" "$CLI_PATH"
         else
             rm -f "$CLI_PATH"
         fi
@@ -187,13 +187,13 @@ usage() {
     --node-type, -T     Explicit node type for node mode
     --kernel, -k        singbox or xray (default: singbox)
     --version           Release version or latest (default: latest)
-    --binary            Use a local xboard-node binary path instead of downloading
-    --xbctl-binary      Use a local xbctl binary path instead of downloading
+    --binary            Use a local gboard-node binary path instead of downloading
+    --gbctl-binary      Use a local gbctl binary path instead of downloading
     --health-port       Local health port (default: 65530, use 0 to disable)
     --gomemlimit        Runtime GOMEMLIMIT value, e.g. 256MiB
     --gogc              Runtime GOGC value, e.g. 50
     --force-reconfigure Overwrite an existing install even if mode/target changed
-    --purge             With uninstall, delete /etc/xboard-node too
+    --purge             With uninstall, delete /etc/gboard-node too
     --yes, -y           Non-interactive confirmation for destructive operations
 
   EXAMPLES:
@@ -249,7 +249,7 @@ parse_args() {
                 BINARY_SOURCE="$2"
                 shift 2
                 ;;
-            --xbctl-binary)
+            --gbctl-binary)
                 CLI_BINARY_SOURCE="$2"
                 shift 2
                 ;;
@@ -469,12 +469,12 @@ select_binary_source() {
         echo "$BINARY_SOURCE"
         return
     fi
-    if [ -f "./xboard-node" ]; then
-        echo "./xboard-node"
+    if [ -f "./gboard-node" ]; then
+        echo "./gboard-node"
         return
     fi
-    if [ -f "./xboard-node-linux-${ARCH}" ]; then
-        echo "./xboard-node-linux-${ARCH}"
+    if [ -f "./gboard-node-linux-${ARCH}" ]; then
+        echo "./gboard-node-linux-${ARCH}"
         return
     fi
     echo ""
@@ -490,14 +490,14 @@ resolve_download_url() {
 }
 
 stage_binary() {
-    local staged="$TMP_DIR/xboard-node"
+    local staged="$TMP_DIR/gboard-node"
     local local_src
     local_src=$(select_binary_source)
     if [ -n "$local_src" ]; then
         log_step "Using local binary: ${local_src}"
         cp "$local_src" "$staged"
     else
-        resolve_download_url "xboard-node-linux-${ARCH}"
+        resolve_download_url "gboard-node-linux-${ARCH}"
         log_step "Downloading binary: ${DOWNLOAD_URL}"
         if ! curl -fsSL "$DOWNLOAD_URL" -o "$staged"; then
             log_error "Failed to download binary from ${DOWNLOAD_URL}"
@@ -511,34 +511,34 @@ stage_binary() {
     fi
 }
 
-stage_xbctl() {
-    local staged="$TMP_DIR/xbctl"
+stage_gbctl() {
+    local staged="$TMP_DIR/gbctl"
     local local_src=""
     if [ -n "$CLI_BINARY_SOURCE" ]; then
         if [ ! -f "$CLI_BINARY_SOURCE" ]; then
-            log_error "xbctl binary source not found: $CLI_BINARY_SOURCE"
+            log_error "gbctl binary source not found: $CLI_BINARY_SOURCE"
             exit 1
         fi
         local_src="$CLI_BINARY_SOURCE"
-    elif [ -f "./xbctl" ]; then
-        local_src="./xbctl"
-    elif [ -f "./xbctl-linux-${ARCH}" ]; then
-        local_src="./xbctl-linux-${ARCH}"
+    elif [ -f "./gbctl" ]; then
+        local_src="./gbctl"
+    elif [ -f "./gbctl-linux-${ARCH}" ]; then
+        local_src="./gbctl-linux-${ARCH}"
     fi
     if [ -n "$local_src" ]; then
-        log_step "Using local xbctl binary: ${local_src}"
+        log_step "Using local gbctl binary: ${local_src}"
         cp "$local_src" "$staged"
     else
-        resolve_download_url "xbctl-linux-${ARCH}"
-        log_step "Downloading xbctl: ${DOWNLOAD_URL}"
+        resolve_download_url "gbctl-linux-${ARCH}"
+        log_step "Downloading gbctl: ${DOWNLOAD_URL}"
         if ! curl -fsSL "$DOWNLOAD_URL" -o "$staged"; then
-            log_error "Failed to download xbctl from ${DOWNLOAD_URL}"
+            log_error "Failed to download gbctl from ${DOWNLOAD_URL}"
             exit 1
         fi
     fi
     chmod +x "$staged"
     if ! "$staged" version > /dev/null 2>&1; then
-        log_error "Downloaded xbctl failed version check"
+        log_error "Downloaded gbctl failed version check"
         exit 1
     fi
 }
@@ -579,8 +579,8 @@ render_config() {
     fi
 
     local output
-    output=$("$TMP_DIR/xbctl" "${init_args[@]}") || {
-        log_error "xbctl config init failed"
+    output=$("$TMP_DIR/gbctl" "${init_args[@]}") || {
+        log_error "gbctl config init failed"
         exit 1
     }
 
@@ -591,7 +591,7 @@ render_config() {
 render_service() {
     cat >"$TMP_DIR/${SERVICE_NAME}" <<EOF_UNIT
 [Unit]
-Description=Xboard Node Backend
+Description=Gboard Node Backend
 Documentation=https://github.com/jasonsamtago/Gboard-Node
 After=network-online.target
 Wants=network-online.target
@@ -617,10 +617,10 @@ backup_existing_state() {
     BACKUP_PATH="${BACKUP_DIR}/$(date +%Y%m%d-%H%M%S)"
     mkdir -p "$BACKUP_PATH"
     if [ -x "$BINARY_PATH" ]; then
-        cp "$BINARY_PATH" "$BACKUP_PATH/xboard-node"
+        cp "$BINARY_PATH" "$BACKUP_PATH/gboard-node"
     fi
     if [ -x "$CLI_PATH" ]; then
-        cp "$CLI_PATH" "$BACKUP_PATH/xbctl"
+        cp "$CLI_PATH" "$BACKUP_PATH/gbctl"
     fi
     if [ -f "$CONFIG_FILE" ]; then
         cp "$CONFIG_FILE" "$BACKUP_PATH/config.yml"
@@ -647,15 +647,15 @@ stop_existing_service() {
 
 install_staged_files() {
     stop_existing_service
-    install -m 755 "$TMP_DIR/xboard-node" "$BINARY_PATH"
+    install -m 755 "$TMP_DIR/gboard-node" "$BINARY_PATH"
     install -m 600 "$TMP_DIR/config.yml" "$CONFIG_FILE"
     install -m 600 "$TMP_DIR/credentials.env" "$CREDENTIALS_FILE"
     install -m 644 "$TMP_DIR/install-meta.json" "$INSTALL_META"
     if [ -f "$0" ] && [ "$(realpath "$0")" != "$(realpath "$INSTALLER_COPY_PATH" 2>/dev/null || echo "$INSTALLER_COPY_PATH")" ]; then
         install -m 755 "$0" "$INSTALLER_COPY_PATH"
     fi
-    install -m 755 "$TMP_DIR/xbctl" "$CLI_PATH"
-    ln -sf "$CLI_PATH" /usr/bin/xbctl 2>/dev/null || true
+    install -m 755 "$TMP_DIR/gbctl" "$CLI_PATH"
+    ln -sf "$CLI_PATH" /usr/bin/gbctl 2>/dev/null || true
     install -m 644 "$TMP_DIR/${SERVICE_NAME}" "$SERVICE_PATH"
     systemctl daemon-reload
     systemctl enable "$SERVICE_NAME" > /dev/null 2>&1
@@ -709,7 +709,7 @@ perform_install() {
     TMP_DIR=$(mktemp -d)
     ensure_dirs
     stage_binary
-    stage_xbctl
+    stage_gbctl
     render_config
     render_service
     backup_existing_state
@@ -723,7 +723,7 @@ perform_install() {
     if [ "$HEALTH_ENABLED" -eq 1 ]; then
         log_info "Health: http://127.0.0.1:${HEALTH_PORT}/healthz"
     fi
-    log_info "CLI: ${CLI_PATH}  (run '${CLI_PATH} list' if xbctl is not in PATH)"
+    log_info "CLI: ${CLI_PATH}  (run '${CLI_PATH} list' if gbctl is not in PATH)"
 }
 
 perform_upgrade() {
@@ -736,12 +736,12 @@ perform_upgrade() {
     TMP_DIR=$(mktemp -d)
     ensure_dirs
     stage_binary
-    stage_xbctl
+    stage_gbctl
     render_service
     backup_existing_state
-    install -m 755 "$TMP_DIR/xboard-node" "$BINARY_PATH"
-    install -m 755 "$TMP_DIR/xbctl" "$CLI_PATH"
-    ln -sf "$CLI_PATH" /usr/bin/xbctl 2>/dev/null || true
+    install -m 755 "$TMP_DIR/gboard-node" "$BINARY_PATH"
+    install -m 755 "$TMP_DIR/gbctl" "$CLI_PATH"
+    ln -sf "$CLI_PATH" /usr/bin/gbctl 2>/dev/null || true
     install -m 644 "$TMP_DIR/${SERVICE_NAME}" "$SERVICE_PATH"
     systemctl daemon-reload
     systemctl restart "$SERVICE_NAME"
@@ -775,7 +775,7 @@ perform_uninstall() {
     fi
     rm -f "$BINARY_PATH"
     rm -f "$CLI_PATH"
-    rm -f /usr/bin/xbctl 2>/dev/null || true
+    rm -f /usr/bin/gbctl 2>/dev/null || true
     if [ "$PURGE" -eq 1 ]; then
         rm -rf "$INSTALL_ROOT"
         log_info "Removed ${INSTALL_ROOT}"
@@ -789,7 +789,7 @@ perform_uninstall() {
 perform_status() {
     detect_current_state
     echo
-    echo -e "${BOLD}xboard-node install status${NC}"
+    echo -e "${BOLD}gboard-node install status${NC}"
     echo "  state:   ${CURRENT_STATE}"
     if [ -f "$INSTALL_META" ]; then
         echo "  meta:    ${INSTALL_META}"
