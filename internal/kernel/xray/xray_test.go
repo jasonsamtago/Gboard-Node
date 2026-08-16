@@ -6,8 +6,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/cedar2025/xboard-node/internal/config"
-	"github.com/cedar2025/xboard-node/internal/model"
+	"github.com/jasonsamtago/Gboard-Node/internal/config"
+	"github.com/jasonsamtago/Gboard-Node/internal/model"
 	appstats "github.com/xtls/xray-core/app/stats"
 	xrayCore "github.com/xtls/xray-core/core"
 	featurebandwidth "github.com/xtls/xray-core/features/bandwidth"

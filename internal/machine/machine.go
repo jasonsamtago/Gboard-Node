@@ -9,13 +9,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cedar2025/xboard-node/internal/config"
-	"github.com/cedar2025/xboard-node/internal/controlplane"
-	"github.com/cedar2025/xboard-node/internal/model"
-	"github.com/cedar2025/xboard-node/internal/monitor"
-	"github.com/cedar2025/xboard-node/internal/nlog"
-	"github.com/cedar2025/xboard-node/internal/panel"
-	"github.com/cedar2025/xboard-node/internal/service"
+	"github.com/jasonsamtago/Gboard-Node/internal/config"
+	"github.com/jasonsamtago/Gboard-Node/internal/controlplane"
+	"github.com/jasonsamtago/Gboard-Node/internal/model"
+	"github.com/jasonsamtago/Gboard-Node/internal/monitor"
+	"github.com/jasonsamtago/Gboard-Node/internal/nlog"
+	"github.com/jasonsamtago/Gboard-Node/internal/panel"
+	"github.com/jasonsamtago/Gboard-Node/internal/service"
 )
 
 // nodeHandle tracks a running node service.

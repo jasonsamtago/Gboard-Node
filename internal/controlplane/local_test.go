@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/cedar2025/xboard-node/internal/config"
+	"github.com/jasonsamtago/Gboard-Node/internal/config"
 )
 
 func TestLocalControlPlaneInitial(t *testing.T) {

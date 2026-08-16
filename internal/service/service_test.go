@@ -6,11 +6,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cedar2025/xboard-node/internal/cert"
-	"github.com/cedar2025/xboard-node/internal/config"
-	"github.com/cedar2025/xboard-node/internal/kernel"
-	"github.com/cedar2025/xboard-node/internal/limiter"
-	"github.com/cedar2025/xboard-node/internal/model"
+	"github.com/jasonsamtago/Gboard-Node/internal/cert"
+	"github.com/jasonsamtago/Gboard-Node/internal/config"
+	"github.com/jasonsamtago/Gboard-Node/internal/kernel"
+	"github.com/jasonsamtago/Gboard-Node/internal/limiter"
+	"github.com/jasonsamtago/Gboard-Node/internal/model"
 	"golang.org/x/time/rate"
 )
 
