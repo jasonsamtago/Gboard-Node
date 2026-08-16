@@ -21,7 +21,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const (
+const downloadBase = "https://github.com/jasonsamtago/Gboard-Node/releases"
+
+// Default install paths. These start as the gboard-node names and are
+// pointed at a live xboard-node tree only when the new tree is absent
+// and we cannot migrate (typically a non-root status/list).
+var (
 	defaultConfigPath      = "/etc/gboard-node/config.yml"
 	defaultMetaPath        = "/etc/gboard-node/install-meta.json"
 	defaultCredentialsPath = "/etc/gboard-node/credentials.env"
@@ -30,7 +35,6 @@ const (
 	serviceName            = "gboard-node.service"
 	serviceFilePath        = "/etc/systemd/system/gboard-node.service"
 	defaultInstallRoot     = "/etc/gboard-node"
-	downloadBase           = "https://github.com/jasonsamtago/Gboard-Node/releases"
 )
 
 var (
@@ -54,7 +58,7 @@ type fileRootConfig struct {
 	WS        *config.WSConfig   `yaml:"ws,omitempty"`
 	Runtime   *fileRuntimeConfig `yaml:"runtime,omitempty"`
 	Cert      *config.CertConfig `yaml:"cert,omitempty"`
-	Instances []fileInstance      `yaml:"instances,omitempty"`
+	Instances []fileInstance     `yaml:"instances,omitempty"`
 }
 
 type fileInstance struct {
@@ -154,6 +158,18 @@ func run(args []string) error {
 		return nil
 	}
 	switch args[0] {
+	case "help", "-h", "--help", "version", "-v", "--version", "config":
+		// config init is given explicit paths by install.sh.
+	case "uninstall":
+		if err := prepareInstallLayout(false); err != nil {
+			return err
+		}
+	default:
+		if err := prepareInstallLayout(true); err != nil {
+			return err
+		}
+	}
+	switch args[0] {
 	case "status":
 		return runStatus()
 	case "list":
@@ -215,6 +231,10 @@ func printUsage() {
   gbctl uninstall [--purge] [--yes]
   gbctl version
 
+compat:
+  xbctl is a symlink to gbctl for one release
+  existing /etc/xboard-node installs migrate on status/service/upgrade
+
 shortcuts:
   gbctl start|stop|restart        = gbctl service start|stop|restart
   gbctl log|logs                  = gbctl service logs
@@ -225,7 +245,11 @@ shortcuts:
 }
 
 func runStatus() error {
-	fmt.Println("gboard-node status")
+	if usingLegacyLayout() {
+		fmt.Println("gboard-node status (legacy paths; run with sudo to migrate)")
+	} else {
+		fmt.Println("gboard-node status")
+	}
 	fmt.Println()
 
 	// Version from install-meta.json
@@ -435,17 +459,24 @@ func runUpgrade(args []string) error {
 		return cleanupFiles(newBinary, newCLI, fmt.Errorf("gbctl version check failed: %s", string(out)))
 	}
 
-	// Backup existing binaries
+	// Backup existing binaries (new names, or leftover xboard-node / xbctl).
 	backupBinary := defaultBinaryPath + ".bak"
 	backupCLI := defaultCLIPath + ".bak"
-	// Backup existing binaries
 	if fileExists(defaultBinaryPath) {
 		if err := copyFile(defaultBinaryPath, backupBinary); err != nil {
+			return cleanupFiles(newBinary, newCLI, fmt.Errorf("backup binary: %w", err))
+		}
+	} else if fileExists(legacyBinaryPath) {
+		if err := copyFile(legacyBinaryPath, backupBinary); err != nil {
 			return cleanupFiles(newBinary, newCLI, fmt.Errorf("backup binary: %w", err))
 		}
 	}
 	if fileExists(defaultCLIPath) {
 		if err := copyFile(defaultCLIPath, backupCLI); err != nil {
+			return cleanupFiles(newBinary, newCLI, fmt.Errorf("backup gbctl: %w", err))
+		}
+	} else if fileExists(legacyCLIPath) && !isSymlink(legacyCLIPath) {
+		if err := copyFile(legacyCLIPath, backupCLI); err != nil {
 			return cleanupFiles(newBinary, newCLI, fmt.Errorf("backup gbctl: %w", err))
 		}
 	}
@@ -462,9 +493,12 @@ func runUpgrade(args []string) error {
 		return fmt.Errorf("replace gbctl: %w", err)
 	}
 
-	// Recreate /usr/bin/gbctl symlink
-	os.Remove("/usr/bin/gbctl")
-	os.Symlink(defaultCLIPath, "/usr/bin/gbctl")
+	if err := regenerateServiceFile(); err != nil {
+		return fmt.Errorf("write service file: %w", err)
+	}
+	if err := retireLegacyRuntime(); err != nil {
+		return err
+	}
 
 	// Restart service
 	fmt.Println("Restarting service...")
@@ -540,37 +574,56 @@ func runUninstall(args []string) error {
 
 	var warnings []string
 
-	// Stop and disable service
-	if fileExists(serviceFilePath) {
-		if err := runCommand("systemctl", "stop", serviceName); err != nil {
-			warnings = append(warnings, fmt.Sprintf("stop service: %v", err))
+	// Stop and disable current and leftover legacy services.
+	for _, pair := range [][2]string{
+		{serviceFilePath, serviceName},
+		{legacyServiceFilePath, legacyServiceName},
+	} {
+		unitFile, unit := pair[0], pair[1]
+		if fileExists(unitFile) || systemctlIsActive(unit) {
+			if err := runCommand("systemctl", "stop", unit); err != nil {
+				warnings = append(warnings, fmt.Sprintf("stop %s: %v", unit, err))
+			}
+			if err := runCommand("systemctl", "disable", unit); err != nil {
+				warnings = append(warnings, fmt.Sprintf("disable %s: %v", unit, err))
+			}
+			if err := os.Remove(unitFile); err != nil && !os.IsNotExist(err) {
+				warnings = append(warnings, fmt.Sprintf("remove service file %s: %v", unitFile, err))
+			}
 		}
-		if err := runCommand("systemctl", "disable", serviceName); err != nil {
-			warnings = append(warnings, fmt.Sprintf("disable service: %v", err))
-		}
-		if err := os.Remove(serviceFilePath); err != nil {
-			warnings = append(warnings, fmt.Sprintf("remove service file: %v", err))
-		}
-		runCommand("systemctl", "daemon-reload")
 	}
+	runCommand("systemctl", "daemon-reload")
 
-	// Remove binaries
-	// Remove binaries and symlinks
-	for _, p := range []string{defaultBinaryPath, defaultCLIPath, "/usr/bin/gbctl"} {
+	// Remove binaries and compat symlinks.
+	for _, p := range []string{
+		defaultBinaryPath, legacyBinaryPath,
+		defaultCLIPath, currentCLIPathUsrBin,
+		legacyCLIPath, legacyCLIPathUsrBin,
+	} {
 		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
 			warnings = append(warnings, fmt.Sprintf("remove %s: %v", p, err))
 		}
 	}
 
 	if purge {
-		if err := os.RemoveAll(defaultInstallRoot); err != nil {
-			warnings = append(warnings, fmt.Sprintf("remove %s: %v", defaultInstallRoot, err))
-		} else {
-			fmt.Printf("Removed %s\n", defaultInstallRoot)
+		for _, root := range []string{defaultInstallRoot, legacyInstallRoot} {
+			if !dirExists(root) {
+				continue
+			}
+			if err := os.RemoveAll(root); err != nil {
+				warnings = append(warnings, fmt.Sprintf("remove %s: %v", root, err))
+			} else {
+				fmt.Printf("Removed %s\n", root)
+			}
 		}
 	} else {
 		os.Remove(defaultMetaPath)
-		fmt.Printf("Config preserved under %s\n", defaultInstallRoot)
+		os.Remove(filepath.Join(legacyInstallRoot, "install-meta.json"))
+		if dirExists(defaultInstallRoot) {
+			fmt.Printf("Config preserved under %s\n", defaultInstallRoot)
+		} else if dirExists(legacyInstallRoot) {
+			fmt.Printf("Config preserved under %s\n", legacyInstallRoot)
+		}
 	}
 
 	if len(warnings) > 0 {
@@ -1348,7 +1401,7 @@ func runConfigInit(args []string) error {
 	inst.InstanceID = instanceID
 
 	if installRoot == "" {
-		installRoot = "/etc/gboard-node"
+		installRoot = defaultInstallRoot
 	}
 	inst.Kernel.ConfigDir = filepath.Join(installRoot, "instances", instanceID)
 
