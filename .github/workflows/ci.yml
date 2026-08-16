@@ -5,7 +5,7 @@ on:
     branches: [main, master, dev]
     tags: ["v*"]
   pull_request:
-    branches: [main, master]
+    branches: [main, master, dev]
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -56,17 +56,17 @@ jobs:
             make build-linux-arm64
           fi
 
-      - name: Upload xboard-node artifact
+      - name: Upload gboard-node artifact
         uses: actions/upload-artifact@v4
         with:
-          name: xboard-node-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: xboard-node-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: gboard-node-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: gboard-node-${{ matrix.goos }}-${{ matrix.goarch }}
 
-      - name: Upload xbctl artifact
+      - name: Upload gbctl artifact
         uses: actions/upload-artifact@v4
         with:
-          name: xbctl-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: xbctl-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: gbctl-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: gbctl-${{ matrix.goos }}-${{ matrix.goarch }}
 
   build-docker:
     name: Build & Push Docker Image
@@ -122,7 +122,7 @@ jobs:
           tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'dev' }}
           make_latest: ${{ startsWith(github.ref, 'refs/tags/') }}
           files: |
-            dist/xboard-node-linux-amd64
-            dist/xboard-node-linux-arm64
-            dist/xbctl-linux-amd64
-            dist/xbctl-linux-arm64
+            dist/gboard-node-linux-amd64
+            dist/gboard-node-linux-arm64
+            dist/gbctl-linux-amd64
+            dist/gbctl-linux-arm64

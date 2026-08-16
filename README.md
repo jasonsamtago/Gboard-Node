@@ -42,17 +42,19 @@ curl -fsSL https://raw.githubusercontent.com/jasonsamtago/Gboard-Node/dev/instal
 curl -fsSL https://raw.githubusercontent.com/jasonsamtago/Gboard-Node/dev/install.sh | \
   sudo bash -s -- --mode machine --panel https://panel.example.com --token TOKEN --machine-id 1
 
-## xbctl
+```
 
-Run `xbctl` after installation for help. Common commands:
+## gbctl
+
+Run `gbctl` after installation for help. Common commands:
 
 ```bash
-xbctl list                          # list all instances
-xbctl status                        # running status
-xbctl bind add-node --panel URL --token TOKEN --node-id 1
-xbctl bind add-machine --panel URL --token TOKEN --machine-id 1
-xbctl bind remove-node --panel URL --node-id 1
-xbctl service restart
+gbctl list                          # list all instances
+gbctl status                        # running status
+gbctl bind add-node --panel URL --token TOKEN --node-id 1
+gbctl bind add-machine --panel URL --token TOKEN --machine-id 1
+gbctl bind remove-node --panel URL --node-id 1
+gbctl service restart
 ```
 
 ## Configuration

@@ -22,14 +22,14 @@ import (
 )
 
 const (
-	defaultConfigPath      = "/etc/xboard-node/config.yml"
-	defaultMetaPath        = "/etc/xboard-node/install-meta.json"
-	defaultCredentialsPath = "/etc/xboard-node/credentials.env"
-	defaultBinaryPath      = "/usr/local/bin/xboard-node"
-	defaultCLIPath         = "/usr/local/bin/xbctl"
-	serviceName            = "xboard-node.service"
-	serviceFilePath        = "/etc/systemd/system/xboard-node.service"
-	defaultInstallRoot     = "/etc/xboard-node"
+	defaultConfigPath      = "/etc/gboard-node/config.yml"
+	defaultMetaPath        = "/etc/gboard-node/install-meta.json"
+	defaultCredentialsPath = "/etc/gboard-node/credentials.env"
+	defaultBinaryPath      = "/usr/local/bin/gboard-node"
+	defaultCLIPath         = "/usr/local/bin/gbctl"
+	serviceName            = "gboard-node.service"
+	serviceFilePath        = "/etc/systemd/system/gboard-node.service"
+	defaultInstallRoot     = "/etc/gboard-node"
 	downloadBase           = "https://github.com/jasonsamtago/Gboard-Node/releases"
 )
 
@@ -183,7 +183,7 @@ func run(args []string) error {
 	case "uninstall":
 		return runUninstall(args[1:])
 	case "version", "-v", "--version":
-		fmt.Printf("xbctl %s (built %s)\n", version, buildTime)
+		fmt.Printf("gbctl %s (built %s)\n", version, buildTime)
 		return nil
 	case "config":
 		return runConfig(args[1:])
@@ -196,36 +196,36 @@ func run(args []string) error {
 }
 
 func printUsage() {
-	fmt.Println(`xbctl commands:
-  xbctl help
-  xbctl status
-  xbctl list [--output text|json]
-  xbctl instance list [--output text|json]
-  xbctl instance get <id> [--output text|json]
-  xbctl config init --mode node|machine --panel-url URL --token TOKEN [flags]
-  xbctl config health-port [--config PATH]
-  xbctl service status|start|stop|restart|enable|disable|logs
-  xbctl health
-  xbctl bind add-node --panel-url URL --token TOKEN --node-id ID [--node-type TYPE] [--kernel singbox|xray]
-  xbctl bind add-machine --panel-url URL --token TOKEN --machine-id ID [--kernel singbox|xray]
-  xbctl bind remove <instance-id>
-  xbctl bind remove-node --panel URL --node-id ID
-  xbctl bind remove-machine --panel URL --machine-id ID
-  xbctl upgrade [--version VERSION]
-  xbctl uninstall [--purge] [--yes]
-  xbctl version
+	fmt.Println(`gbctl commands:
+  gbctl help
+  gbctl status
+  gbctl list [--output text|json]
+  gbctl instance list [--output text|json]
+  gbctl instance get <id> [--output text|json]
+  gbctl config init --mode node|machine --panel-url URL --token TOKEN [flags]
+  gbctl config health-port [--config PATH]
+  gbctl service status|start|stop|restart|enable|disable|logs
+  gbctl health
+  gbctl bind add-node --panel-url URL --token TOKEN --node-id ID [--node-type TYPE] [--kernel singbox|xray]
+  gbctl bind add-machine --panel-url URL --token TOKEN --machine-id ID [--kernel singbox|xray]
+  gbctl bind remove <instance-id>
+  gbctl bind remove-node --panel URL --node-id ID
+  gbctl bind remove-machine --panel URL --machine-id ID
+  gbctl upgrade [--version VERSION]
+  gbctl uninstall [--purge] [--yes]
+  gbctl version
 
 shortcuts:
-  xbctl start|stop|restart        = xbctl service start|stop|restart
-  xbctl log|logs                  = xbctl service logs
-  xbctl bind-node ...             = xbctl bind add-node ...
-  xbctl bind-machine ...          = xbctl bind add-machine ...
-  xbctl unbind-node ...           = xbctl bind remove-node ...
-  xbctl unbind-machine ...        = xbctl bind remove-machine ...`)
+  gbctl start|stop|restart        = gbctl service start|stop|restart
+  gbctl log|logs                  = gbctl service logs
+  gbctl bind-node ...             = gbctl bind add-node ...
+  gbctl bind-machine ...          = gbctl bind add-machine ...
+  gbctl unbind-node ...           = gbctl bind remove-node ...
+  gbctl unbind-machine ...        = gbctl bind remove-machine ...`)
 }
 
 func runStatus() error {
-	fmt.Println("xboard-node status")
+	fmt.Println("gboard-node status")
 	fmt.Println()
 
 	// Version from install-meta.json
@@ -273,7 +273,7 @@ func runInstance(args []string) error {
 		return fmt.Errorf("unknown instance command: %s", args[0])
 	}
 	if len(args) < 2 {
-		return errors.New("usage: xbctl instance get <id> [--output text|json]")
+		return errors.New("usage: gbctl instance get <id> [--output text|json]")
 	}
 	id := args[1]
 	output := parseOutput(args[2:])
@@ -291,7 +291,7 @@ func runInstance(args []string) error {
 
 func runService(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: xbctl service <status|start|stop|restart|enable|disable|logs>")
+		return errors.New("usage: gbctl service <status|start|stop|restart|enable|disable|logs>")
 	}
 	sub := args[0]
 	rest := args[1:]
@@ -321,7 +321,7 @@ func runHealth() error {
 
 func runBind(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: xbctl bind <add-node|add-machine|remove-node|remove-machine> ...")
+		return errors.New("usage: gbctl bind <add-node|add-machine|remove-node|remove-machine> ...")
 	}
 	if err := ensureRoot("bind"); err != nil {
 		return err
@@ -347,7 +347,7 @@ func runBind(args []string) error {
 		return removeBinding(panel, 0, machineID, "")
 	case "remove":
 		if len(rest) == 0 {
-			return errors.New("usage: xbctl bind remove <instance-id>")
+			return errors.New("usage: gbctl bind remove <instance-id>")
 		}
 		return removeBinding("", 0, 0, rest[0])
 	default:
@@ -403,11 +403,11 @@ func runUpgrade(args []string) error {
 
 	binaryDir := filepath.Dir(defaultBinaryPath)
 	cliDir := filepath.Dir(defaultCLIPath)
-	newBinary := filepath.Join(binaryDir, ".xboard-node.new")
-	newCLI := filepath.Join(cliDir, ".xbctl.new")
+	newBinary := filepath.Join(binaryDir, ".gboard-node.new")
+	newCLI := filepath.Join(cliDir, ".gbctl.new")
 
-	binaryURL := resolveDownloadURL(fmt.Sprintf("xboard-node-linux-%s", arch), version)
-	cliURL := resolveDownloadURL(fmt.Sprintf("xbctl-linux-%s", arch), version)
+	binaryURL := resolveDownloadURL(fmt.Sprintf("gboard-node-linux-%s", arch), version)
+	cliURL := resolveDownloadURL(fmt.Sprintf("gbctl-linux-%s", arch), version)
 
 	fmt.Printf("Downloading %s...\n", binaryURL)
 	if err := downloadFile(binaryURL, newBinary); err != nil {
@@ -417,14 +417,14 @@ func runUpgrade(args []string) error {
 	fmt.Printf("Downloading %s...\n", cliURL)
 	if err := downloadFile(cliURL, newCLI); err != nil {
 		os.Remove(newBinary)
-		return fmt.Errorf("download xbctl: %w", err)
+		return fmt.Errorf("download gbctl: %w", err)
 	}
 
 	if err := os.Chmod(newBinary, 0o755); err != nil {
 		return cleanupFiles(newBinary, newCLI, fmt.Errorf("chmod binary: %w", err))
 	}
 	if err := os.Chmod(newCLI, 0o755); err != nil {
-		return cleanupFiles(newBinary, newCLI, fmt.Errorf("chmod xbctl: %w", err))
+		return cleanupFiles(newBinary, newCLI, fmt.Errorf("chmod gbctl: %w", err))
 	}
 
 	// Validate downloaded binaries
@@ -432,7 +432,7 @@ func runUpgrade(args []string) error {
 		return cleanupFiles(newBinary, newCLI, fmt.Errorf("binary version check failed: %s", string(out)))
 	}
 	if out, err := exec.Command(newCLI, "version").CombinedOutput(); err != nil {
-		return cleanupFiles(newBinary, newCLI, fmt.Errorf("xbctl version check failed: %s", string(out)))
+		return cleanupFiles(newBinary, newCLI, fmt.Errorf("gbctl version check failed: %s", string(out)))
 	}
 
 	// Backup existing binaries
@@ -446,7 +446,7 @@ func runUpgrade(args []string) error {
 	}
 	if fileExists(defaultCLIPath) {
 		if err := copyFile(defaultCLIPath, backupCLI); err != nil {
-			return cleanupFiles(newBinary, newCLI, fmt.Errorf("backup xbctl: %w", err))
+			return cleanupFiles(newBinary, newCLI, fmt.Errorf("backup gbctl: %w", err))
 		}
 	}
 
@@ -459,12 +459,12 @@ func runUpgrade(args []string) error {
 			os.Rename(backupBinary, defaultBinaryPath)
 		}
 		os.Remove(newCLI)
-		return fmt.Errorf("replace xbctl: %w", err)
+		return fmt.Errorf("replace gbctl: %w", err)
 	}
 
-	// Recreate /usr/bin/xbctl symlink
-	os.Remove("/usr/bin/xbctl")
-	os.Symlink(defaultCLIPath, "/usr/bin/xbctl")
+	// Recreate /usr/bin/gbctl symlink
+	os.Remove("/usr/bin/gbctl")
+	os.Symlink(defaultCLIPath, "/usr/bin/gbctl")
 
 	// Restart service
 	fmt.Println("Restarting service...")
@@ -480,7 +480,7 @@ func runUpgrade(args []string) error {
 		}
 		if fileExists(backupCLI) {
 			if e := os.Rename(backupCLI, defaultCLIPath); e != nil {
-				fmt.Printf("Warning: rollback xbctl failed: %v\n", e)
+				fmt.Printf("Warning: rollback gbctl failed: %v\n", e)
 				rollbackOK = false
 			}
 		}
@@ -556,7 +556,7 @@ func runUninstall(args []string) error {
 
 	// Remove binaries
 	// Remove binaries and symlinks
-	for _, p := range []string{defaultBinaryPath, defaultCLIPath, "/usr/bin/xbctl"} {
+	for _, p := range []string{defaultBinaryPath, defaultCLIPath, "/usr/bin/gbctl"} {
 		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
 			warnings = append(warnings, fmt.Sprintf("remove %s: %v", p, err))
 		}
@@ -683,7 +683,7 @@ func parseRemoveNodeArgs(args []string) (string, int, error) {
 		}
 	}
 	if strings.TrimSpace(panel) == "" || nodeID <= 0 {
-		return "", 0, errors.New("usage: xbctl bind remove-node --panel URL --node-id ID")
+		return "", 0, errors.New("usage: gbctl bind remove-node --panel URL --node-id ID")
 	}
 	return strings.TrimSpace(panel), nodeID, nil
 }
@@ -714,7 +714,7 @@ func parseRemoveMachineArgs(args []string) (string, int, error) {
 		}
 	}
 	if strings.TrimSpace(panel) == "" || machineID <= 0 {
-		return "", 0, errors.New("usage: xbctl bind remove-machine --panel URL --machine-id ID")
+		return "", 0, errors.New("usage: gbctl bind remove-machine --panel URL --machine-id ID")
 	}
 	return strings.TrimSpace(panel), machineID, nil
 }
@@ -785,7 +785,7 @@ func removeBinding(panelURL string, nodeID int, machineID int, instanceID string
 		runCommand("systemctl", "stop", serviceName)
 		fmt.Printf("removed %d binding(s)\n", len(removed))
 		fmt.Println("All bindings removed. Service stopped.")
-		fmt.Println("Use 'xbctl bind add-node/add-machine' to add a new binding, or 'xbctl uninstall' to fully uninstall.")
+		fmt.Println("Use 'gbctl bind add-node/add-machine' to add a new binding, or 'gbctl uninstall' to fully uninstall.")
 		return nil
 	}
 
@@ -1156,7 +1156,7 @@ func latestInstanceID(instances []*config.Config) string {
 
 func regenerateServiceFile() error {
 	unit := fmt.Sprintf(`[Unit]
-Description=Xboard Node Backend
+Description=Gboard Node Backend
 Documentation=https://github.com/jasonsamtago/Gboard-Node
 After=network-online.target
 Wants=network-online.target
@@ -1191,7 +1191,7 @@ func machineIDPtr(cfg *config.Config) *int {
 
 func runConfig(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: xbctl config <init|health-port>")
+		return errors.New("usage: gbctl config <init|health-port>")
 	}
 	switch args[0] {
 	case "init":
@@ -1348,7 +1348,7 @@ func runConfigInit(args []string) error {
 	inst.InstanceID = instanceID
 
 	if installRoot == "" {
-		installRoot = "/etc/xboard-node"
+		installRoot = "/etc/gboard-node"
 	}
 	inst.Kernel.ConfigDir = filepath.Join(installRoot, "instances", instanceID)
 
