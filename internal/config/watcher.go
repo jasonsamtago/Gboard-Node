@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/cedar2025/xboard-node/internal/nlog"
+	"github.com/jasonsamtago/Gboard-Node/internal/nlog"
 	"github.com/fsnotify/fsnotify"
 )
 

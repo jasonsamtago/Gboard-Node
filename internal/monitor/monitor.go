@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cedar2025/xboard-node/internal/nlog"
+	"github.com/jasonsamtago/Gboard-Node/internal/nlog"
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/disk"
 	"github.com/shirou/gopsutil/v4/load"
