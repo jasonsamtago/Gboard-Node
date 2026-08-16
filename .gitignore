@@ -3,6 +3,10 @@
 /gboard-node-linux-*
 /gbctl
 /gbctl-linux-*
+/xboard-node
+/xboard-node-linux-*
+/xbctl
+/xbctl-linux-*
 *.exe
 
 # Config files (may contain secrets)

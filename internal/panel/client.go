@@ -25,7 +25,7 @@ var (
 	onlineMapPool  = sync.Pool{New: func() interface{} { return make(map[string]int) }}
 )
 
-// Client communicates with the Gboard panel API.
+// Client communicates with the Xboard panel API.
 // When machineID > 0 the client uses machine-level authentication
 // (machine_id + token) instead of the legacy (token + node_type) scheme.
 type Client struct {

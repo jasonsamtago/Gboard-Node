@@ -477,6 +477,15 @@ select_binary_source() {
         echo "./gboard-node-linux-${ARCH}"
         return
     fi
+    # One-release fallback for leftover local filenames from the xboard rename.
+    if [ -f "./xboard-node" ]; then
+        echo "./xboard-node"
+        return
+    fi
+    if [ -f "./xboard-node-linux-${ARCH}" ]; then
+        echo "./xboard-node-linux-${ARCH}"
+        return
+    fi
     echo ""
 }
 
@@ -524,6 +533,10 @@ stage_gbctl() {
         local_src="./gbctl"
     elif [ -f "./gbctl-linux-${ARCH}" ]; then
         local_src="./gbctl-linux-${ARCH}"
+    elif [ -f "./xbctl" ]; then
+        local_src="./xbctl"
+    elif [ -f "./xbctl-linux-${ARCH}" ]; then
+        local_src="./xbctl-linux-${ARCH}"
     fi
     if [ -n "$local_src" ]; then
         log_step "Using local gbctl binary: ${local_src}"
