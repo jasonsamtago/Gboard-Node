@@ -328,7 +328,6 @@ kernel:
 	}
 }
 
-
 func TestLoadRoot_LegacyConfigNormalizesToSingleInstance(t *testing.T) {
 	path := writeTemp(t, `
 panel:
@@ -679,4 +678,26 @@ cert:
 		t.Errorf("after Load+Expand CertDir = %q, want %q", got.Cert.CertDir, want)
 	}
 	assertNotPerNodeCertDir(t, got.Cert.CertDir, 96)
+}
+
+func TestMachineSharedCertDir(t *testing.T) {
+	base := "/etc/gboard-node/certs/acme"
+	if got := MachineSharedCertDir(base, "node1.example.com"); got != filepath.Join(base, "node1.example.com") {
+		t.Errorf("plain domain: got %q", got)
+	}
+	if got := MachineSharedCertDir(base, "Node1.Example.COM"); got != filepath.Join(base, "node1.example.com") {
+		t.Errorf("domain must be case-insensitive: got %q", got)
+	}
+	if got := MachineSharedCertDir(base, ""); got != base {
+		t.Errorf("empty domain must keep base: got %q", got)
+	}
+	if got := MachineSharedCertDir(base, "*.example.com"); got != filepath.Join(base, "_.example.com") {
+		t.Errorf("wildcard: got %q", got)
+	}
+	if got := MachineSharedCertDir(base, "../etc/passwd"); strings.Contains(got, "..") {
+		t.Errorf("path traversal must be sanitized: got %q", got)
+	}
+	if MachineSharedCertDir("", "example.com") != "" {
+		t.Error("empty base must stay empty")
+	}
 }

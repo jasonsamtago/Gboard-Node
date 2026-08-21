@@ -355,7 +355,12 @@ func (s *Service) applyNodeCert(ctx context.Context, newCfg *config.CertConfig) 
 		return false
 	}
 	cfgCopy := *newCfg
-	cfgCopy.CertDir = s.cfg.Cert.CertDir
+	if base := strings.TrimSpace(s.cfg.Cert.CertStorageBase); base != "" {
+		cfgCopy.CertStorageBase = base
+		cfgCopy.CertDir = config.MachineSharedCertDir(base, cfgCopy.Domain)
+	} else {
+		cfgCopy.CertDir = s.cfg.Cert.CertDir
+	}
 
 	changed, err := s.cert.Reconfigure(ctx, cfgCopy)
 	if err != nil {
