@@ -432,6 +432,9 @@ func (s *SingBox) ClearGlobalDevices() {
 // ─── User management (non-disruptive) ───────────────────────────────────────
 
 // AddUsers hot-swaps users into running inbounds. Zero connection disruption.
+// Same panel ID with a new UUID (reset subscription / plan change) replaces
+// the old identity — ID-only de-dup would skip the inbound write and leave
+// sing-box logging "unknown UUID".
 func (s *SingBox) AddUsers(users []model.UserSpec) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -439,27 +442,26 @@ func (s *SingBox) AddUsers(users []model.UserSpec) (int, error) {
 	if s.box == nil {
 		return 0, fmt.Errorf("not running")
 	}
-
-	existing := make(map[int]struct{}, len(s.users))
-	for _, u := range s.users {
-		existing[u.ID] = struct{}{}
-	}
-	var toAdd []model.UserSpec
-	for _, u := range users {
-		if _, dup := existing[u.ID]; !dup {
-			toAdd = append(toAdd, u)
-		}
-	}
-	if len(toAdd) == 0 {
+	if len(users) == 0 {
 		return 0, nil
 	}
 
-	merged := append(append([]model.UserSpec{}, s.users...), toAdd...)
+	merged := mergeUsersByID(s.users, users)
+	toAdd, toRemove := kernel.UserDiff(s.users, merged)
+	// Bookkeeping may already have the new UUID while the inbound still
+	// holds the old one. Always hot-write the inbound for the requested set.
 	if err := s.reloadInboundsLocked(merged); err != nil {
 		return 0, err
 	}
+	s.closeRemovedUsersLocked(toRemove)
 	s.users = merged
-	return len(toAdd), nil
+	added := len(toAdd)
+	if added == 0 {
+		added = len(users)
+	}
+	nlog.Core().Info("sing-box: users added via hot-swap",
+		"added", added, "removed", len(toRemove), "total", len(merged), "restart", false)
+	return added, nil
 }
 
 // RemoveUsers hot-swaps users out of running inbounds. Zero connection disruption
@@ -492,7 +494,10 @@ func (s *SingBox) RemoveUsers(users []model.UserSpec) (int, error) {
 	if err := s.reloadInboundsLocked(kept); err != nil {
 		return 0, err
 	}
+	s.closeRemovedUsersLocked(users)
 	s.users = kept
+	nlog.Core().Info("sing-box: users removed via hot-swap",
+		"removed", removed, "total", len(kept), "restart", false)
 	return removed, nil
 }
 
@@ -520,8 +525,46 @@ func (s *SingBox) UpdateUsers(users []model.UserSpec) (added, removed int, err e
 	if err = s.reloadInboundsLocked(users); err != nil {
 		return 0, 0, err
 	}
+	s.closeRemovedUsersLocked(toRemove)
 	s.users = users
+	nlog.Core().Info("sing-box: users updated via hot-swap",
+		"added", added, "removed", removed, "total", len(users), "restart", false)
 	return
+}
+
+func (s *SingBox) closeRemovedUsersLocked(removed []model.UserSpec) {
+	if s.connTracker == nil {
+		return
+	}
+	for _, u := range removed {
+		if u.UUID == "" {
+			continue
+		}
+		s.connTracker.CloseByUUID(u.UUID)
+	}
+}
+
+func mergeUsersByID(base, overlay []model.UserSpec) []model.UserSpec {
+	if len(overlay) == 0 {
+		out := make([]model.UserSpec, len(base))
+		copy(out, base)
+		return out
+	}
+	index := make(map[int]int, len(base)+len(overlay))
+	out := make([]model.UserSpec, 0, len(base)+len(overlay))
+	for _, u := range base {
+		index[u.ID] = len(out)
+		out = append(out, u)
+	}
+	for _, u := range overlay {
+		if i, ok := index[u.ID]; ok {
+			out[i] = u
+			continue
+		}
+		index[u.ID] = len(out)
+		out = append(out, u)
+	}
+	return out
 }
 
 // reloadInboundsLocked hot-swaps inbound users using UpdatableInbound.
@@ -614,7 +657,7 @@ func (s *SingBox) reloadInboundsLocked(users []model.UserSpec) error {
 		s.connTracker.SetUserMap(buildUserMap(users))
 	}
 
-	nlog.Core().Debug("sing-box users hot-swapped", "users", len(users))
+	nlog.Core().Info("sing-box users hot-swapped", "users", len(users), "restart", false)
 	return nil
 }
 
