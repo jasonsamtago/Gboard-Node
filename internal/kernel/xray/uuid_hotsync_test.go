@@ -139,7 +139,7 @@ func TestXrayUpdateUsers_AddUserFailureDoesNotCountAdded(t *testing.T) {
 	before := logs.Len()
 	added, removed, err := x.UpdateUsers([]model.UserSpec{
 		{ID: uuidHotOtherID, UUID: uuidHotOtherUUID},
-		{ID: 99, UUID: "not-a-uuid"},
+		{ID: 99, UUID: ""},
 	})
 	if err != nil {
 		t.Fatalf("UpdateUsers: %v", err)
