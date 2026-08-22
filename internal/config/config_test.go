@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -327,7 +328,6 @@ kernel:
 	}
 }
 
-
 func TestLoadRoot_LegacyConfigNormalizesToSingleInstance(t *testing.T) {
 	path := writeTemp(t, `
 panel:
@@ -541,5 +541,163 @@ func TestInheritFrom_AutoTLSInheritedWhenChildHasNoCertConfig(t *testing.T) {
 	child.inheritFrom(parent)
 	if !child.Cert.AutoTLS {
 		t.Error("auto_tls should be inherited when child has no cert config")
+	}
+}
+
+func machineExpandFixture() *Config {
+	return &Config{
+		Panel: PanelConfig{URL: "https://panel.example.com"},
+		Machine: &MachineConfig{
+			MachineID: 7,
+			Token:     "machine-token",
+		},
+		Kernel: KernelConfig{
+			Type:      "singbox",
+			ConfigDir: "/etc/gboard-node/instances/m7",
+		},
+		Cert: CertConfig{
+			CertMode: "dns",
+			Domain:   "node1.example.com",
+			Email:    "admin@example.com",
+		},
+	}
+}
+
+func assertNotPerNodeCertDir(t *testing.T, certDir string, nodeIDs ...int) {
+	t.Helper()
+	for _, id := range nodeIDs {
+		marker := fmt.Sprintf("node-%d", id)
+		if strings.Contains(certDir, marker) {
+			t.Errorf("cert storage %q must not be isolated under %s/", certDir, marker)
+		}
+	}
+}
+
+// TestExpandMachineNode_RespectsUserCertDir locks the cedar2025/Xboard-Node#69
+// regression: machine expansion used to overwrite cert.cert_dir with
+// <config_dir>/node-<id>/certs, so a user-set ACME directory never took effect.
+func TestExpandMachineNode_RespectsUserCertDir(t *testing.T) {
+	cfg := machineExpandFixture()
+	cfg.Cert.CertDir = "/etc/gboard-node/certs/acme"
+
+	got := cfg.ExpandMachineNode(96, "hysteria2")
+
+	want := filepath.Join("/etc/gboard-node/certs/acme", "node1.example.com")
+	if got.Cert.CertDir != want {
+		t.Errorf("CertDir = %q, want %q", got.Cert.CertDir, want)
+	}
+	assertNotPerNodeCertDir(t, got.Cert.CertDir, 96)
+	if got.Kernel.ConfigDir != "/etc/gboard-node/instances/m7/node-96" {
+		t.Errorf("kernel ConfigDir = %q, want per-node directory", got.Kernel.ConfigDir)
+	}
+}
+
+// TestExpandMachineNode_DefaultCertDirWhenUnset: when the operator does not set
+// cert_dir, expansion must still produce a non-empty default (not leave ACME
+// without storage). The default must not be a per-node directory, otherwise
+// same-domain nodes cannot share FileStorage / locks.
+func TestExpandMachineNode_DefaultCertDirWhenUnset(t *testing.T) {
+	cfg := machineExpandFixture()
+	cfg.Cert.CertDir = ""
+
+	got := cfg.ExpandMachineNode(96, "hysteria2")
+
+	if got.Cert.CertDir == "" {
+		t.Fatal("expected a default cert_dir when unset")
+	}
+	want := filepath.Join("/etc/gboard-node/instances/m7", "certs", "node1.example.com")
+	if got.Cert.CertDir != want {
+		t.Errorf("CertDir = %q, want default %q", got.Cert.CertDir, want)
+	}
+	assertNotPerNodeCertDir(t, got.Cert.CertDir, 96)
+}
+
+func TestExpandMachineNode_SameDomainSharesStorage(t *testing.T) {
+	cfg := machineExpandFixture()
+	cfg.Cert.CertDir = "/etc/gboard-node/certs/acme"
+
+	a := cfg.ExpandMachineNode(96, "hysteria2")
+	b := cfg.ExpandMachineNode(97, "tuic")
+
+	if a.Cert.CertDir == "" || b.Cert.CertDir == "" {
+		t.Fatal("expected non-empty cert storage paths")
+	}
+	if a.Cert.CertDir != b.Cert.CertDir {
+		t.Fatalf("same-domain machine nodes must share cert storage, got %q and %q", a.Cert.CertDir, b.Cert.CertDir)
+	}
+	if a.Kernel.ConfigDir == b.Kernel.ConfigDir {
+		t.Fatal("kernel config_dir must remain per-node even when cert storage is shared")
+	}
+}
+
+func TestExpandMachineNode_DifferentDomainDoesNotShare(t *testing.T) {
+	cfg := machineExpandFixture()
+	cfg.Cert.CertDir = "/etc/gboard-node/certs/acme"
+
+	a := cfg.ExpandMachineNode(96, "hysteria2")
+	cfg.Cert.Domain = "other.example.com"
+	b := cfg.ExpandMachineNode(97, "tuic")
+
+	if a.Cert.CertDir == b.Cert.CertDir {
+		t.Fatalf("different domains must not share cert storage, both %q", a.Cert.CertDir)
+	}
+	assertNotPerNodeCertDir(t, a.Cert.CertDir, 96, 97)
+	assertNotPerNodeCertDir(t, b.Cert.CertDir, 96, 97)
+	if !strings.Contains(a.Cert.CertDir, "node1.example.com") {
+		t.Errorf("same-machine storage for %q should be keyed by that domain, got %q", "node1.example.com", a.Cert.CertDir)
+	}
+	if !strings.Contains(b.Cert.CertDir, "other.example.com") {
+		t.Errorf("same-machine storage for %q should be keyed by that domain, got %q", "other.example.com", b.Cert.CertDir)
+	}
+}
+
+func TestLoad_ExpandMachineNodeRespectsCertDirFromYAML(t *testing.T) {
+	path := writeTemp(t, `
+panel:
+  url: "https://panel.example.com"
+machine:
+  machine_id: 7
+  token: "machine-token"
+kernel:
+  type: singbox
+  config_dir: /etc/gboard-node/instances/m7
+cert:
+  cert_mode: dns
+  domain: node1.example.com
+  email: admin@example.com
+  cert_dir: /etc/gboard-node/certs/acme
+  dns_provider: cloudflare
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	got := cfg.ExpandMachineNode(96, "hysteria2")
+	want := filepath.Join("/etc/gboard-node/certs/acme", "node1.example.com")
+	if got.Cert.CertDir != want {
+		t.Errorf("after Load+Expand CertDir = %q, want %q", got.Cert.CertDir, want)
+	}
+	assertNotPerNodeCertDir(t, got.Cert.CertDir, 96)
+}
+
+func TestMachineSharedCertDir(t *testing.T) {
+	base := "/etc/gboard-node/certs/acme"
+	if got := MachineSharedCertDir(base, "node1.example.com"); got != filepath.Join(base, "node1.example.com") {
+		t.Errorf("plain domain: got %q", got)
+	}
+	if got := MachineSharedCertDir(base, "Node1.Example.COM"); got != filepath.Join(base, "node1.example.com") {
+		t.Errorf("domain must be case-insensitive: got %q", got)
+	}
+	if got := MachineSharedCertDir(base, ""); got != base {
+		t.Errorf("empty domain must keep base: got %q", got)
+	}
+	if got := MachineSharedCertDir(base, "*.example.com"); got != filepath.Join(base, "_.example.com") {
+		t.Errorf("wildcard: got %q", got)
+	}
+	if got := MachineSharedCertDir(base, "../etc/passwd"); strings.Contains(got, "..") {
+		t.Errorf("path traversal must be sanitized: got %q", got)
+	}
+	if MachineSharedCertDir("", "example.com") != "" {
+		t.Error("empty base must stay empty")
 	}
 }

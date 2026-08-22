@@ -19,14 +19,14 @@ import (
 )
 
 type Config struct {
-	InstanceID string `yaml:"-"`
-	Panel   PanelConfig   `yaml:"panel"`
-	Node    NodeConfig    `yaml:"node"`
-	Kernel  KernelConfig  `yaml:"kernel"`
-	Cert    CertConfig    `yaml:"cert"`
-	Log     LogConfig     `yaml:"log"`
-	Runtime RuntimeConfig `yaml:"runtime"`
-	WS      WSConfig      `yaml:"ws"`
+	InstanceID string        `yaml:"-"`
+	Panel      PanelConfig   `yaml:"panel"`
+	Node       NodeConfig    `yaml:"node"`
+	Kernel     KernelConfig  `yaml:"kernel"`
+	Cert       CertConfig    `yaml:"cert"`
+	Log        LogConfig     `yaml:"log"`
+	Runtime    RuntimeConfig `yaml:"runtime"`
+	WS         WSConfig      `yaml:"ws"`
 	// Standalone enables a local-only node that never contacts the panel.
 	Standalone *StandaloneConfig `yaml:"standalone,omitempty"`
 	// HealthPort enables a lightweight HTTP health-check endpoint on the
@@ -151,7 +151,11 @@ type CertConfig struct {
 	CertFile string `yaml:"cert_file"`
 	KeyFile  string `yaml:"key_file"`
 	CertDir  string `yaml:"cert_dir"`
-	HTTPPort int    `yaml:"http_port"` // port for HTTP-01 challenge (default: 80)
+	// CertStorageBase is the machine-level cert directory before domain
+	// isolation. ExpandMachineNode sets this so runtime panel cert pushes
+	// can re-resolve CertDir when the domain changes. Empty outside machine mode.
+	CertStorageBase string `yaml:"-"`
+	HTTPPort        int    `yaml:"http_port"` // port for HTTP-01 challenge (default: 80)
 
 	// CertMode selects the TLS certificate strategy:
 	//   ""       - auto-detect: if CertFile is set → file; if AutoTLS → http; else none
@@ -801,13 +805,57 @@ func (c *Config) ExpandMachineNode(nodeID int, nodeType string) *Config {
 	nodeCfg.Panel.Token = c.Machine.Token
 	nodeCfg.Panel.MachineID = c.Machine.MachineID
 
-	nodeCfg.Kernel.ConfigDir = fmt.Sprintf("%s/node-%d", c.Kernel.ConfigDir, nodeID)
-	if nodeCfg.Kernel.GeoDataDir == c.Kernel.ConfigDir {
+	parentConfigDir := c.Kernel.ConfigDir
+	nodeCfg.Kernel.ConfigDir = fmt.Sprintf("%s/node-%d", parentConfigDir, nodeID)
+	if nodeCfg.Kernel.GeoDataDir == parentConfigDir {
 		nodeCfg.Kernel.GeoDataDir = c.Kernel.GeoDataDir
 	}
-	nodeCfg.Cert.CertDir = filepath.Join(nodeCfg.Kernel.ConfigDir, "certs")
+
+	// Respect an operator-set cert_dir (or the Load() default). Never overwrite
+	// with <config_dir>/node-<id>/certs — that isolates certmagic FileStorage
+	// and causes duplicate Let's Encrypt issuance for the same domain.
+	base := strings.TrimSpace(c.Cert.CertDir)
+	if base == "" {
+		if parentConfigDir != "" {
+			base = filepath.Join(parentConfigDir, "certs")
+		} else {
+			base = filepath.Join(nodeCfg.Kernel.ConfigDir, "certs")
+		}
+	}
+	nodeCfg.Cert.CertStorageBase = base
+	nodeCfg.Cert.CertDir = MachineSharedCertDir(base, nodeCfg.Cert.Domain)
 
 	return &nodeCfg
+}
+
+// MachineSharedCertDir returns the certmagic FileStorage path for a machine
+// node. base is the operator-set cert_dir or the machine-level default.
+// Same domain (case-insensitive) shares one path so ACME locks and cached
+// certs are reused; different domains stay separate so persistPEM files
+// (cert.pem / key.pem) do not clobber each other.
+func MachineSharedCertDir(base, domain string) string {
+	base = strings.TrimSpace(base)
+	if base == "" {
+		return ""
+	}
+	safe := sanitizeCertDomainDir(domain)
+	if safe == "" {
+		return base
+	}
+	return filepath.Join(base, safe)
+}
+
+func sanitizeCertDomainDir(domain string) string {
+	d := strings.ToLower(strings.TrimSpace(domain))
+	if d == "" {
+		return ""
+	}
+	d = strings.ReplaceAll(d, "..", "_")
+	d = strings.ReplaceAll(d, "/", "_")
+	d = strings.ReplaceAll(d, "\\", "_")
+	d = strings.ReplaceAll(d, "*", "_")
+	d = strings.ReplaceAll(d, "\x00", "_")
+	return d
 }
 
 func InitLogger(cfg LogConfig) {

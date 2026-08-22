@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -34,8 +35,8 @@ type fakeKernel struct {
 	deviceLimitFunc func(string) (int, bool)
 }
 
-func (f *fakeKernel) Name() string { return "fake" }
-func (f *fakeKernel) Protocols() []string { return []string{"vless"} }
+func (f *fakeKernel) Name() string                      { return "fake" }
+func (f *fakeKernel) Protocols() []string               { return []string{"vless"} }
 func (f *fakeKernel) Capabilities() kernel.Capabilities { return kernel.Capabilities{} }
 func (f *fakeKernel) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls kernel.TLSCert) error {
 	_, _, _ = nodeConfig, users, tls
@@ -46,7 +47,7 @@ func (f *fakeKernel) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, t
 	f.running = true
 	return nil
 }
-func (f *fakeKernel) Stop() { f.running = false }
+func (f *fakeKernel) Stop()           { f.running = false }
 func (f *fakeKernel) IsRunning() bool { return f.running }
 func (f *fakeKernel) Reload(nodeConfig *model.NodeSpec, users []model.UserSpec, tls kernel.TLSCert) error {
 	_, _, _ = nodeConfig, users, tls
@@ -92,9 +93,9 @@ func (f *fakeKernel) CloseUserConnections(ctx context.Context, uuid string) erro
 	return nil
 }
 func (f *fakeKernel) SetSpeedLimitFunc(fn func(uuid string) *rate.Limiter) { f.speedLimitFunc = fn }
-func (f *fakeKernel) SetDeviceLimitFunc(fn func(uuid string) (int, bool)) { f.deviceLimitFunc = fn }
-func (f *fakeKernel) UpdateGlobalDevices(users map[int][]string) { _ = users }
-func (f *fakeKernel) ClearGlobalDevices() {}
+func (f *fakeKernel) SetDeviceLimitFunc(fn func(uuid string) (int, bool))  { f.deviceLimitFunc = fn }
+func (f *fakeKernel) UpdateGlobalDevices(users map[int][]string)           { _ = users }
+func (f *fakeKernel) ClearGlobalDevices()                                  {}
 
 func newTestService(k *fakeKernel) *Service {
 	sharedLimiter := limiter.New()
@@ -198,7 +199,6 @@ func TestApplyUserDeltaAddPreparesLimiterBeforeKernelUpdate(t *testing.T) {
 	}
 }
 
-
 func TestValidateNodeRuntimeRejectsUnsupportedDNSProvider(t *testing.T) {
 	cfg := &config.Config{Kernel: config.KernelConfig{Type: "singbox"}}
 	err := validateNodeRuntime(cfg, []string{"http"}, &model.NodeSpec{
@@ -294,5 +294,40 @@ func TestValidateNodeRuntimeRejectsRealityWithoutServerNameOrDest(t *testing.T) 
 	}
 	if got := err.Error(); got != "reality tls requires tls_settings.server_name or tls_settings.dest" {
 		t.Fatalf("unexpected error: %v", got)
+	}
+}
+
+func TestApplyNodeCert_MachineDomainSharesAndIsolatesStorage(t *testing.T) {
+	base := t.TempDir()
+	s := newTestService(&fakeKernel{})
+	s.cfg = &config.Config{
+		Cert: config.CertConfig{
+			CertMode:        "none",
+			CertDir:         filepath.Join(base, "stale"),
+			CertStorageBase: base,
+		},
+	}
+	s.cert = cert.NewManager(s.cfg.Cert)
+
+	same := &config.CertConfig{CertMode: "none", Domain: "node1.example.com"}
+	s.applyNodeCert(context.Background(), same)
+	dirA := s.cfg.Cert.CertDir
+	wantA := config.MachineSharedCertDir(base, "node1.example.com")
+	if dirA != wantA {
+		t.Fatalf("CertDir = %q, want %q", dirA, wantA)
+	}
+
+	s.applyNodeCert(context.Background(), same)
+	if s.cfg.Cert.CertDir != dirA {
+		t.Fatalf("same domain must keep storage %q, got %q", dirA, s.cfg.Cert.CertDir)
+	}
+
+	s.applyNodeCert(context.Background(), &config.CertConfig{CertMode: "none", Domain: "other.example.com"})
+	if s.cfg.Cert.CertDir == dirA {
+		t.Fatal("different domains must not share cert storage")
+	}
+	wantB := config.MachineSharedCertDir(base, "other.example.com")
+	if s.cfg.Cert.CertDir != wantB {
+		t.Fatalf("CertDir = %q, want %q", s.cfg.Cert.CertDir, wantB)
 	}
 }
