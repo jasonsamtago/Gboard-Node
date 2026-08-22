@@ -123,9 +123,10 @@ func (u *userStats) aliveIPList() map[string]bool {
 //   - Per-connection rate limit token accumulation (amortized WaitN)
 type ConnTracker struct {
 	usersMu sync.RWMutex
-	users   map[int]*userStats  // userID → stats
-	uuidMap map[string]int      // UUID → userID (for lookup in RoutedConnection)
-	connMap map[string]net.Conn // connID → conn (only for force-close support)
+	users    map[int]*userStats  // userID → stats
+	uuidMap  map[string]int      // UUID → userID (for lookup in RoutedConnection)
+	connMap  map[string]io.Closer // connID → closer (TCP + Hy2/TUIC PacketConn)
+	connUUID map[string]string    // connID → uuid（CloseByUUID 用）
 
 	idCounter atomic.Int64
 
@@ -146,7 +147,8 @@ func NewConnTracker(_ int) *ConnTracker {
 	return &ConnTracker{
 		users:         make(map[int]*userStats),
 		uuidMap:       make(map[string]int),
-		connMap:       make(map[string]net.Conn),
+		connMap:       make(map[string]io.Closer),
+		connUUID:      make(map[string]string),
 		globalDevices: make(map[int]map[string]bool),
 	}
 }
@@ -239,6 +241,7 @@ func (t *ConnTracker) RoutedConnection(
 	// Store conn reference for force-close support
 	t.usersMu.Lock()
 	t.connMap[connID] = conn
+	t.connUUID[connID] = uuid
 	t.usersMu.Unlock()
 
 	var lim *rate.Limiter
@@ -258,10 +261,8 @@ func (t *ConnTracker) RoutedConnection(
 	}
 }
 
-// RoutedPacketConnection wraps UDP with per-user counting (UDP not in connMap).
-// Note: UDP connections are NOT stored in connMap because connMap is typed as
-// map[string]net.Conn, but PacketConn is a different interface. Force-close
-// for UDP connections is handled directly via trackedPacketConn.Close().
+// RoutedPacketConnection wraps UDP with per-user counting and speed_limit.
+// PacketConn 也進 connMap，流量上限抽用戶時 CloseByUUID 才能斷 Hy2／TUIC UDP。
 func (t *ConnTracker) RoutedPacketConnection(
 	ctx context.Context, conn N.PacketConn,
 	metadata adapter.InboundContext,
@@ -298,16 +299,31 @@ func (t *ConnTracker) RoutedPacketConnection(
 		lim = (*slf)(uuid)
 	}
 
-	return &trackedPacketConn{
+	wrapped := &trackedPacketConn{
 		PacketConn: conn,
 		tracker:    t,
 		us:         us,
 		userID:     uid,
+		uuid:       uuid,
 		connID:     connID,
 		sourceIP:   sourceIP,
 		limiter:    lim,
 		ctx:        ctx,
 	}
+
+	// UDP 也要進 connMap，流量上限抽用戶時 CloseByUUID 才能斷。
+	t.usersMu.Lock()
+	t.connMap[connID] = wrapped
+	t.connUUID[connID] = uuid
+	t.usersMu.Unlock()
+
+	if lim != nil {
+		nlog.Core().Info("singbox: udp speed limit attached", "user", uuid)
+	} else {
+		nlog.Core().Info("singbox: udp unlimited user allowed", "user", uuid)
+	}
+
+	return wrapped
 }
 
 // checkDeviceGate rejects connections exceeding device limit.
@@ -456,10 +472,30 @@ func (t *ConnTracker) CloseByID(id string) bool {
 
 // CloseByUUID force-closes ALL connections for a given user UUID.
 func (t *ConnTracker) CloseByUUID(uuid string) int {
-	// This is a no-op for now — sing-box doesn't expose per-user connection
-	// kill easily. The kernel's RemoveUsers removes the inbound user which
-	// prevents new connections, and existing connections will fail on next I/O.
-	return 0
+	t.usersMu.Lock()
+	var closers []io.Closer
+	for id, u := range t.connUUID {
+		if u != uuid {
+			continue
+		}
+		if c := t.connMap[id]; c != nil {
+			closers = append(closers, c)
+		}
+	}
+	t.usersMu.Unlock()
+
+	n := 0
+	for _, c := range closers {
+		if c != nil {
+			_ = c.Close()
+			n++
+		}
+	}
+	if n > 0 {
+		nlog.Core().Info("singbox: closing user connections",
+			"user", uuid, "count", n, "reason", "traffic quota")
+	}
+	return n
 }
 
 // ActiveCount returns the total number of active connections.
@@ -479,6 +515,7 @@ func (t *ConnTracker) ActiveCount() int {
 func (t *ConnTracker) removeConnRef(connID string) {
 	t.usersMu.Lock()
 	delete(t.connMap, connID)
+	delete(t.connUUID, connID)
 	t.usersMu.Unlock()
 }
 
@@ -688,14 +725,16 @@ func (c *trackedConn) WriterReplaceable() bool { return true }
 
 type trackedPacketConn struct {
 	N.PacketConn
-	tracker  *ConnTracker
-	us       *userStats
-	userID   int
-	connID   string
-	sourceIP string
-	limiter  *rate.Limiter
-	ctx      context.Context
-	closed   atomic.Bool
+	tracker   *ConnTracker
+	us        *userStats
+	userID    int
+	uuid      string
+	connID    string
+	sourceIP  string
+	limiter   *rate.Limiter
+	ctx       context.Context
+	closed    atomic.Bool
+	throttled atomic.Bool
 }
 
 func (c *trackedPacketConn) ReadPacket(buffer *buf.Buffer) (singM.Socksaddr, error) {
@@ -772,6 +811,7 @@ func (c *trackedPacketConn) makeCountFunc(counter *atomic.Int64) N.CountFunc {
 		counter.Add(n)
 		// Non-blocking rate limiting with context cancellation
 		if !c.limiter.AllowN(time.Now(), int(n)) {
+			c.logUDPThrottle()
 			resv := c.limiter.ReserveN(time.Now(), int(n))
 			if delay := resv.Delay(); delay > 0 {
 				timer := time.NewTimer(delay)
@@ -784,6 +824,12 @@ func (c *trackedPacketConn) makeCountFunc(counter *atomic.Int64) N.CountFunc {
 				}
 			}
 		}
+	}
+}
+
+func (c *trackedPacketConn) logUDPThrottle() {
+	if c.throttled.CompareAndSwap(false, true) {
+		nlog.Core().Info("singbox: udp speed limit throttled", "user", c.uuid)
 	}
 }
 
@@ -801,6 +847,9 @@ func (c *trackedPacketConn) UnwrapPacketWriter() (N.PacketWriter, []N.CountFunc)
 	return c.PacketConn, []N.CountFunc{c.makeCountFunc(&c.us.download)} // 向入站写入 = 用户下载
 }
 
-func (c *trackedPacketConn) Upstream() any           { return c.PacketConn }
+func (c *trackedPacketConn) Upstream() any { return c.PacketConn }
 func (c *trackedPacketConn) ReaderReplaceable() bool { return true }
-func (c *trackedPacketConn) WriterReplaceable() bool { return true }
+
+// WriterReplaceable 必須是 false：sing CopyPacket 的 UnwrapCountPacketWriter
+// 會先 UnwrapPacketWriter。true 會把包裝剝掉，speed_limit CountFunc 沒了。
+func (c *trackedPacketConn) WriterReplaceable() bool { return false }
