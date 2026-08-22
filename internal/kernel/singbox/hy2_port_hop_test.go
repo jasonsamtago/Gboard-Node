@@ -135,15 +135,11 @@ func asInboundSlice(raw any) []M {
 		for _, item := range v {
 			if m, ok := item.(M); ok {
 				out = append(out, m)
-			} else if m, ok := item.(map[string]any); ok {
-				out = append(out, M(m))
 			}
 		}
 		return out
 	case M:
 		return []M{v}
-	case map[string]any:
-		return []M{M(v)}
 	default:
 		return nil
 	}
@@ -174,11 +170,6 @@ func collectListenCoverage(v any) listenCoverage {
 func walkListenValues(v any, fn func(key string, val any)) {
 	switch x := v.(type) {
 	case M:
-		for k, val := range x {
-			fn(k, val)
-			walkListenValues(val, fn)
-		}
-	case map[string]any:
 		for k, val := range x {
 			fn(k, val)
 			walkListenValues(val, fn)
