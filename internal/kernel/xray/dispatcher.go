@@ -153,9 +153,13 @@ func (d *LimitDispatcher) identifyAndCheck(ctx context.Context, dest net.Destina
 	return email, sourceIP, isTCP, nil
 }
 
-// trackLink records connection lifecycle without mutating xray-core owned
-// transport primitives. This keeps mux/XUDP compatible while still allowing
-// the dispatcher to release device-limit state when the link closes.
+// trackLink records connection lifecycle so device-limit state is released
+// when the link closes. Reader is left intact (mux/XUDP needs *pipe.Reader).
+//
+// Writer is wrapped with closeTrackingWriter. If the outer writer is already
+// *dispatcher.SizeStatWriter, wrap inside it: xray vision splice
+// (CopyRawConnIfExist) only increments the outermost SizeStatWriter, so
+// hiding that type drops user stats by an order of magnitude.
 func (d *LimitDispatcher) trackLink(link *transport.Link, email, sourceIP string, isTCP bool) {
 	d.connCount.Add(1)
 
@@ -166,10 +170,14 @@ func (d *LimitDispatcher) trackLink(link *transport.Link, email, sourceIP string
 		d.connCount.Add(-1)
 	}
 
-	link.Writer = &closeTrackingWriter{
-		Writer:  link.Writer,
-		onClose: onClose,
+	tracker := &closeTrackingWriter{onClose: onClose}
+	if sw, ok := link.Writer.(*xrayDispatcher.SizeStatWriter); ok {
+		tracker.Writer = sw.Writer
+		sw.Writer = tracker
+		return
 	}
+	tracker.Writer = link.Writer
+	link.Writer = tracker
 }
 
 // ─── features.Feature (delegated) ───────────────────────────────────────────

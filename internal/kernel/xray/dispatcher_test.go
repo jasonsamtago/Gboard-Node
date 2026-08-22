@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/jasonsamtago/Gboard-Node/internal/model"
+	xrayDispatcher "github.com/xtls/xray-core/app/dispatcher"
 	"github.com/xtls/xray-core/common/buf"
 	"github.com/xtls/xray-core/transport"
 )
@@ -185,7 +186,6 @@ func TestLimitDispatcher_UnlimitedUserFastPath(t *testing.T) {
 	}
 }
 
-
 func TestLimitDispatcher_TrackLinkPreservesReader(t *testing.T) {
 	ld := newTestDispatcher()
 	email := userEmail(1)
@@ -204,6 +204,44 @@ func TestLimitDispatcher_TrackLinkPreservesReader(t *testing.T) {
 		t.Fatal("trackLink should wrap link.Writer for lifecycle callbacks")
 	}
 }
+
+// Official cedar2025/Xboard-Node #21：vision splice 只認最外層
+// *dispatcher.SizeStatWriter。trackLink 若把 SizeStatWriter 包在別的
+// Writer 裡面，splice 加不到 user stats，report 會少一個數量級。
+func TestLimitDispatcher_TrackLinkMustNotHideSizeStatWriter(t *testing.T) {
+	ld := newTestDispatcher()
+	email := userEmail(21)
+	ld.UpdateLimits(map[string]int{email: 21}, nil, nil)
+
+	counter := &spliceStatCounter{}
+	statWriter := &xrayDispatcher.SizeStatWriter{Counter: counter, Writer: buf.Discard}
+	link := &transport.Link{Reader: nopReader{}, Writer: statWriter}
+
+	ld.trackLink(link, email, "1.1.1.1", true)
+
+	outer, ok := link.Writer.(*xrayDispatcher.SizeStatWriter)
+	if !ok {
+		t.Fatalf("trackLink 把 SizeStatWriter 藏到 %T 後面，vision splice 加不到 user stats（官方 #21）", link.Writer)
+	}
+	if outer.Counter != counter {
+		t.Fatal("trackLink 換掉了 SizeStatWriter.Counter，splice 會計錯人")
+	}
+	if got := ld.connCount.Load(); got != 1 {
+		t.Fatalf("trackLink 後 connCount=%d，要 1", got)
+	}
+	if err := outer.Close(); err != nil {
+		t.Fatalf("SizeStatWriter.Close: %v", err)
+	}
+	if got := ld.connCount.Load(); got != 0 {
+		t.Fatalf("SizeStatWriter.Close 後 connCount=%d，要 0：不准為了露出 SizeStatWriter 就不包 close 回呼", got)
+	}
+}
+
+type spliceStatCounter struct{ n int64 }
+
+func (c *spliceStatCounter) Value() int64      { return c.n }
+func (c *spliceStatCounter) Set(v int64) int64 { old := c.n; c.n = v; return old }
+func (c *spliceStatCounter) Add(v int64) int64 { c.n += v; return c.n }
 
 func TestLimitDispatcher_CloseTrackingWriterReleasesConn(t *testing.T) {
 	ld := newTestDispatcher()
