@@ -20,8 +20,12 @@ import (
 
 	"github.com/jasonsamtago/Gboard-Node/internal/config"
 	"github.com/jasonsamtago/Gboard-Node/internal/kernel"
+	"github.com/jasonsamtago/Gboard-Node/internal/kernel/singbox/hy2inbound"
+	"github.com/jasonsamtago/Gboard-Node/internal/kernel/singbox/tuicinbound"
 	"github.com/jasonsamtago/Gboard-Node/internal/model"
 	"github.com/jasonsamtago/Gboard-Node/internal/nlog"
+
+	singInbound "github.com/sagernet/sing-box/adapter/inbound"
 )
 
 // drainTimeout is how long stop() waits for in-flight connections to finish
@@ -103,6 +107,7 @@ func (s *SingBox) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls 
 
 	ctx, cancel := context.WithCancel(context.Background())
 	ctx = include.Context(ctx)
+	overrideHy2TUICInbounds(ctx)
 
 	opts, err := singJSON.UnmarshalExtendedContext[option.Options](ctx, data)
 	if err != nil {
@@ -654,4 +659,16 @@ func buildUserMap(users []model.UserSpec) map[string]int {
 		m[u.UUID] = u.ID
 	}
 	return m
+}
+
+// overrideHy2TUICInbounds swaps cedar2025 Hy2/TUIC constructors for the
+// Gboard-Node copies that store uuid/id in ctx. Must run after include.Context.
+func overrideHy2TUICInbounds(ctx context.Context) {
+	reg, ok := service.FromContext[adapter.InboundRegistry](ctx).(*singInbound.Registry)
+	if !ok {
+		nlog.Core().Warn("hy2/tuic inbound override skipped: registry type mismatch")
+		return
+	}
+	hy2inbound.RegisterInbound(reg)
+	tuicinbound.RegisterInbound(reg)
 }
