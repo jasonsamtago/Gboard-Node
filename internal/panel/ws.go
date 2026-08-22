@@ -10,8 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/jasonsamtago/Gboard-Node/internal/nlog"
 	"github.com/gorilla/websocket"
+	"github.com/jasonsamtago/Gboard-Node/internal/nlog"
 )
 
 // WSEvent types
@@ -421,13 +421,13 @@ func (w *WSClient) handleDataEvent(msg wsMessage) {
 
 	case WSEventSyncDevices:
 		nlog.Core().Debug("ws sync devices event received")
-		var p syncDevicesPayload
-		if err := decodeData(msg.Data, &p); err != nil {
+		users, nodeID, err := decodeDevicesPayload(msg.Data)
+		if err != nil {
 			nlog.Core().Warn("ws: cannot decode devices payload", "error", err)
 			return
 		}
-		event.DeviceUsers = p.Users
-		event.NodeID = p.NodeID
+		event.DeviceUsers = users
+		event.NodeID = nodeID
 
 	case WSEventSyncNodes:
 		nlog.Core().Info("ws sync nodes event received (machine node list changed)")
