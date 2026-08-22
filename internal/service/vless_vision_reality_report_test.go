@@ -46,6 +46,10 @@ import (
 // trackAndEnforce → Report。report 下載必須接近目的端實際寫出的字節，
 // 不能少一個數量級。沒流量仍是 0。不准灌假流量、不准用倍率湊數。
 // VMess／普通 VLESS／TCP 無 vision 不能被改壞。
+//
+// 真實 vision 連線在 go test -race 會觸發 xray outbound.Process 的
+// checkptr fatal，CI 只 skip 這則；不准關整個 -race。沒連線與
+// dispatcher SizeStatWriter 測試仍要在 -race 下跑。
 
 const (
 	visionReportUserID    = 21
@@ -83,6 +87,8 @@ func TestVLESSVisionReality_NoConnectionStaysZero(t *testing.T) {
 }
 
 func TestVLESSVisionReality_RealDownloadReportsActualBytes(t *testing.T) {
+	skipVisionSpliceUnderRace(t)
+
 	svc, rec, logs, dest, stop := startVisionRealityNode(t)
 	defer dest.close()
 	defer stop()
