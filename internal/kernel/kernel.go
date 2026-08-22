@@ -138,7 +138,12 @@ func UserDiff(oldUsers, newUsers []model.UserSpec) (toAdd, toRemove []model.User
 		}
 	}
 	for _, u := range oldUsers {
-		if _, exists := newMap[u.ID]; !exists {
+		newUser, exists := newMap[u.ID]
+		// Same panel ID with a new UUID must replace the runtime account.
+		// Xray/sing-box key dynamic users by email (user@<id>); adding the
+		// new UUID without first removing the old one is rejected as
+		// "already exists" and leaves the expired identity active.
+		if !exists || u.UUID != newUser.UUID {
 			toRemove = append(toRemove, u)
 		}
 	}

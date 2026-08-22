@@ -435,9 +435,8 @@ func (x *Xray) UpdateUsers(users []model.UserSpec) (added, removed int, err erro
 		return 0, 0, fmt.Errorf("not running")
 	}
 	toAdd, toRemove := kernel.UserDiff(x.users, users)
-	added, removed = len(toAdd), len(toRemove)
 
-	if added == 0 && removed == 0 {
+	if len(toAdd) == 0 && len(toRemove) == 0 {
 		// Only limits changed — update dispatcher without restart.
 		x.users = users
 		x.mu.Unlock()
@@ -456,7 +455,7 @@ func (x *Xray) UpdateUsers(users []model.UserSpec) (added, removed int, err erro
 		if err = x.Start(nc, users, t); err != nil {
 			return 0, 0, err
 		}
-		return
+		return len(toAdd), len(toRemove), nil
 	}
 
 	proto := x.protocol
@@ -465,21 +464,30 @@ func (x *Xray) UpdateUsers(users []model.UserSpec) (added, removed int, err erro
 
 	ctx := context.Background()
 
-	// Remove first, then add (order matters for UUID changes on same ID)
+	// Remove first, then add (order matters for UUID changes on same ID).
+	// Count only operations that actually succeeded — a failed AddUser
+	// must never be reported as added=1 / users updated: +1 -0.
 	for _, u := range toRemove {
 		email := userEmail(u.ID)
 		if err := um.RemoveUser(ctx, email); err != nil {
 			nlog.Core().Debug("xray: RemoveUser skipped in UpdateUsers", "user", u.ID, "error", err)
-		}
-	}
-	for _, u := range toAdd {
-		mu, err := toMemoryUser(proto, nc, u)
-		if err != nil {
-			nlog.Core().Warn("xray: skip user in UpdateUsers", "user", u.ID, "error", err)
 			continue
 		}
-		if err := um.AddUser(ctx, mu); err != nil {
-			nlog.Core().Warn("xray: AddUser failed in UpdateUsers", "user", u.ID, "error", err)
+		removed++
+	}
+	for _, u := range toAdd {
+		mu, buildErr := toMemoryUser(proto, nc, u)
+		if buildErr != nil {
+			nlog.Core().Warn("xray: skip user in UpdateUsers", "user", u.ID, "error", buildErr)
+			continue
+		}
+		ok, replaced := addUserReplacing(ctx, um, mu, u.ID)
+		if !ok {
+			continue
+		}
+		added++
+		if replaced {
+			removed++
 		}
 	}
 
@@ -491,6 +499,38 @@ func (x *Xray) UpdateUsers(users []model.UserSpec) (added, removed int, err erro
 
 	nlog.Core().Info("xray: users updated via UserManager", "added", added, "removed", removed, "total", len(users))
 	return
+}
+
+// addUserReplacing adds a user via UserManager. If the same email already
+// exists (UUID rotation with stale runtime state), it removes then adds.
+// replaced is true only when the already-exists recovery path ran.
+// A failed AddUser never counts as success.
+func addUserReplacing(ctx context.Context, um xrayProxy.UserManager, mu *protocol.MemoryUser, userID int) (ok, replaced bool) {
+	if err := um.AddUser(ctx, mu); err == nil {
+		return true, false
+	} else if !isAlreadyExistsErr(err) {
+		nlog.Core().Warn("xray: AddUser failed in UpdateUsers", "user", userID, "error", err)
+		return false, false
+	}
+
+	email := userEmail(userID)
+	nlog.Core().Info("xray: AddUser already exists, removed then adding", "user", userID, "email", email)
+	if remErr := um.RemoveUser(ctx, email); remErr != nil {
+		nlog.Core().Warn("xray: AddUser failed in UpdateUsers", "user", userID, "error", remErr)
+		return false, false
+	}
+	if err := um.AddUser(ctx, mu); err != nil {
+		nlog.Core().Warn("xray: AddUser failed in UpdateUsers", "user", userID, "error", err)
+		return false, false
+	}
+	return true, true
+}
+
+func isAlreadyExistsErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "already exists")
 }
 
 var _ kernel.Kernel = (*Xray)(nil)
