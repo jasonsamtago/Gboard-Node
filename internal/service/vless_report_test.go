@@ -62,6 +62,7 @@ func TestVLESSReport_NoConnectionStaysZero(t *testing.T) {
 
 			svc.trackAndEnforce(context.Background())
 			report := rec.waitReport(t, svc)
+			logText := logs.String()
 
 			if len(report.Traffic) != 0 {
 				t.Fatalf("沒連線時 traffic = %#v，要空", report.Traffic)
@@ -69,8 +70,8 @@ func TestVLESSReport_NoConnectionStaysZero(t *testing.T) {
 			if len(report.Online) != 0 {
 				t.Fatalf("沒連線時 online = %#v，要空", report.Online)
 			}
-			if !strings.Contains(logs.String(), "report pushed: 0 users, 0 online") {
-				t.Fatalf("沒連線時要留下 report pushed: 0 users, 0 online，log=\n%s", logs.String())
+			if !strings.Contains(logText, "report pushed: 0 users, 0 online") {
+				t.Fatalf("沒連線時要留下 report pushed: 0 users, 0 online，log=\n%s", logText)
 			}
 			t.Logf("沒連線 report 證據: traffic=%v online=%v log 含 %q", report.Traffic, report.Online, "report pushed: 0 users, 0 online")
 		})
@@ -165,19 +166,45 @@ func (r *reportRecorder) SupportsDeviceReports() bool                           
 func (r *reportRecorder) waitReport(t *testing.T, svc *Service) controlplane.ReportPayload {
 	t.Helper()
 	svc.pushReportAsync()
+	var payload controlplane.ReportPayload
 	select {
-	case payload := <-r.ch:
-		return payload
+	case payload = <-r.ch:
 	case <-time.After(3 * time.Second):
 		t.Fatal("等不到 Report")
 		return controlplane.ReportPayload{}
 	}
+	// ReportPushed 在 Report 回傳之後才寫 log；等 push goroutine 結束再讀 buffer。
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if !svc.pushActive.Load() {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return payload
 }
 
-func startVLESSReportService(t *testing.T, kernelType string) (*Service, *reportRecorder, *bytes.Buffer, func()) {
+type lockedLogBuf struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (w *lockedLogBuf) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.b.Write(p)
+}
+
+func (w *lockedLogBuf) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.b.String()
+}
+
+func startVLESSReportService(t *testing.T, kernelType string) (*Service, *reportRecorder, *lockedLogBuf, func()) {
 	t.Helper()
 
-	logs := &bytes.Buffer{}
+	logs := &lockedLogBuf{}
 	nlog.Init(logs, slog.LevelDebug, false)
 
 	port := freeTCPPort(t)
