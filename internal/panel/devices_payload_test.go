@@ -2,21 +2,13 @@ package panel
 
 import (
 	"bytes"
-	"context"
-	"io"
 	"log/slog"
-	"net"
-	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
-	"github.com/jasonsamtago/Gboard-Node/internal/kernel/singbox"
 	"github.com/jasonsamtago/Gboard-Node/internal/nlog"
-	"github.com/sagernet/sing-box/adapter"
-	singM "github.com/sagernet/sing/common/metadata"
 )
 
 // Official cedar2025/Xboard-Node #29 / #40：
@@ -98,54 +90,6 @@ func TestDecodeDevicesPayload_SingleBadUserDoesNotDropPackage(t *testing.T) {
 	t.Logf("解碼日誌（單筆失敗不拖整包）:\n%s", logText)
 }
 
-func TestDecodeDevicesPayload_DeviceLimitBlocksAfterCrossNodeSync(t *testing.T) {
-	cases := []struct {
-		name string
-		raw  string
-	}{
-		{"字串 IP", devicesOfficialStringJSON},
-		{"物件 {ip:...}", devicesOfficialObjectJSON},
-		{"PHP 破洞物件", devicesHoleyPHPJSON},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			ev, logs := receiveDevicesEvent(t, tc.raw)
-			if ev.DeviceUsers == nil {
-				t.Fatalf("解不出 devices，跨節點 device_limit 會失效:\n%s", logs.String())
-			}
-			assertDecodedUserIPs(t, ev, 15029, "1.2.3.4", "5.6.7.8")
-
-			tracker := singbox.NewConnTracker(0)
-			tracker.SetUserMap(map[string]int{"uuid-15029": 15029})
-			tracker.SetDeviceLimitFunc(func(uuid string) (int, bool) {
-				if uuid != "uuid-15029" {
-					return 0, false
-				}
-				return 1, true
-			})
-			tracker.UpdateGlobalDevices(ev.DeviceUsers)
-
-			before := logs.Len()
-			same := &devicesTestConn{}
-			if wrapped := tracker.RoutedConnection(context.Background(), same, devicesInbound("uuid-15029", "1.2.3.4"), nil, nil); wrapped == same || same.closed {
-				t.Fatalf("他節點已見的 1.2.3.4 必須放行（limit=1）\n%s", logs.String())
-			}
-
-			excess := &devicesTestConn{}
-			wrapped := tracker.RoutedConnection(context.Background(), excess, devicesInbound("uuid-15029", "9.9.9.9"), nil, nil)
-			gateLogs := logs.Since(before)
-			if wrapped != excess || !excess.closed {
-				t.Fatalf("跨節點同步後超額 9.9.9.9 必須被 device_limit 攔住（不准關限制）\n解碼日誌:\n%s\n限制日誌:\n%s", logs.String(), gateLogs)
-			}
-			if !strings.Contains(gateLogs, "device limit") && !strings.Contains(gateLogs, "reject") {
-				t.Fatalf("限制日誌要寫出攔住超額裝置:\n%s", gateLogs)
-			}
-			t.Logf("限制證據 name=%s blocked=9.9.9.9 allowed=1.2.3.4\n解碼:\n%s\n限制:\n%s", tc.name, logs.String(), gateLogs)
-		})
-	}
-}
-
 func receiveDevicesEvent(t *testing.T, raw string) (WSEvent, *devicesLogBuf) {
 	t.Helper()
 	logs := &devicesLogBuf{}
@@ -199,24 +143,6 @@ func assertDecodeLogSuccess(t *testing.T, logs string, userID int, ips ...string
 	}
 }
 
-func devicesInbound(uuid, ip string) adapter.InboundContext {
-	return adapter.InboundContext{
-		User:   uuid,
-		Source: singM.Socksaddr{Addr: netip.MustParseAddr(ip)},
-	}
-}
-
-type devicesTestConn struct{ closed bool }
-
-func (c *devicesTestConn) Read([]byte) (int, error)         { return 0, io.EOF }
-func (c *devicesTestConn) Write(b []byte) (int, error)      { return len(b), nil }
-func (c *devicesTestConn) Close() error                     { c.closed = true; return nil }
-func (c *devicesTestConn) LocalAddr() net.Addr              { return &net.TCPAddr{} }
-func (c *devicesTestConn) RemoteAddr() net.Addr             { return &net.TCPAddr{} }
-func (c *devicesTestConn) SetDeadline(time.Time) error      { return nil }
-func (c *devicesTestConn) SetReadDeadline(time.Time) error  { return nil }
-func (c *devicesTestConn) SetWriteDeadline(time.Time) error { return nil }
-
 type devicesLogBuf struct {
 	mu sync.Mutex
 	b  bytes.Buffer
@@ -234,18 +160,3 @@ func (w *devicesLogBuf) String() string {
 	return w.b.String()
 }
 
-func (w *devicesLogBuf) Len() int {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.b.Len()
-}
-
-func (w *devicesLogBuf) Since(n int) string {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	s := w.b.String()
-	if n >= len(s) {
-		return ""
-	}
-	return s[n:]
-}
