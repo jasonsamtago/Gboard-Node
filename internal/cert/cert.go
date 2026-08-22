@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/caddyserver/certmagic"
+	"go.uber.org/zap"
 
 	"github.com/jasonsamtago/Gboard-Node/internal/cert/dnsproviders"
 	"github.com/jasonsamtago/Gboard-Node/internal/config"
@@ -59,6 +60,12 @@ type Manager struct {
 	acmeStarted     bool
 	acmeFingerprint string
 	acmeCancel      context.CancelFunc
+
+	// testIssuers replaces the production Let's Encrypt ACME issuer.
+	// NewManager never sets this; tests inject a local CA / stub so we
+	// can exercise the real obtain path without hitting production.
+	testIssuers []certmagic.Issuer
+	acmeLogger  *zap.Logger
 }
 
 // certMaterial is an immutable snapshot of PEM-encoded cert + key.
@@ -413,7 +420,7 @@ func (m *Manager) startACME(ctx context.Context, dnsSolver *certmagic.DNS01Solve
 		},
 	})
 
-	magic = certmagic.New(cache, certmagic.Config{
+	magicCfg := certmagic.Config{
 		Storage: storage,
 		OnEvent: func(evtCtx context.Context, event string, data map[string]any) error {
 			// Only react to renewals; initial load happens explicitly after ObtainCertSync.
@@ -435,30 +442,41 @@ func (m *Manager) startACME(ctx context.Context, dnsSolver *certmagic.DNS01Solve
 			nlog.Core().Info("TLS certificate reloaded after renewal", "domain", m.cfg.Domain)
 			return nil
 		},
-	})
-
-	issuer := certmagic.ACMEIssuer{
-		CA:    certmagic.LetsEncryptProductionCA,
-		Email: m.cfg.Email,
+	}
+	if m.acmeLogger != nil {
+		magicCfg.Logger = m.acmeLogger
 	}
 
-	if dnsSolver != nil {
-		// DNS-01 mode: no HTTP port needed, supports wildcards.
-		issuer.DNS01Solver = dnsSolver
-		issuer.DisableHTTPChallenge = true
-		issuer.DisableTLSALPNChallenge = true
+	magic = certmagic.New(cache, magicCfg)
+
+	if len(m.testIssuers) > 0 {
+		// Tests inject a local CA / stub. Production never sets testIssuers,
+		// so ACME stays on Let's Encrypt — this is not a file-only fallback.
+		magic.Issuers = m.testIssuers
 	} else {
-		// HTTP-01 mode.
-		httpPort := m.cfg.HTTPPort
-		if httpPort == 0 {
-			httpPort = 80
+		issuer := certmagic.ACMEIssuer{
+			CA:    certmagic.LetsEncryptProductionCA,
+			Email: m.cfg.Email,
 		}
-		issuer.AltHTTPPort = httpPort
-		issuer.DisableTLSALPNChallenge = true
-	}
 
-	magic.Issuers = []certmagic.Issuer{
-		certmagic.NewACMEIssuer(magic, issuer),
+		if dnsSolver != nil {
+			// DNS-01 mode: no HTTP port needed, supports wildcards.
+			issuer.DNS01Solver = dnsSolver
+			issuer.DisableHTTPChallenge = true
+			issuer.DisableTLSALPNChallenge = true
+		} else {
+			// HTTP-01 mode.
+			httpPort := m.cfg.HTTPPort
+			if httpPort == 0 {
+				httpPort = 80
+			}
+			issuer.AltHTTPPort = httpPort
+			issuer.DisableTLSALPNChallenge = true
+		}
+
+		magic.Issuers = []certmagic.Issuer{
+			certmagic.NewACMEIssuer(magic, issuer),
+		}
 	}
 	m.magic = magic
 
