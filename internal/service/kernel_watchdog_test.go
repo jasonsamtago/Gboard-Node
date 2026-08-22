@@ -216,13 +216,7 @@ func udpPortListening(port int) bool {
 
 func writeWatchdogEvidence(t *testing.T, name, text string) {
 	t.Helper()
-	body := []byte(text + "\n")
-	if err := os.WriteFile(filepath.Join(t.TempDir(), name), body, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(t.TempDir(), name), []byte(text+"\n"), 0o644); err != nil {
 		t.Fatalf("write evidence: %v", err)
-	}
-	if _, err := os.Stat("/opt/cursor/artifacts"); err == nil {
-		if err := os.WriteFile(filepath.Join("/opt/cursor/artifacts", name), body, 0o644); err != nil {
-			t.Logf("artifacts copy skipped: %v", err)
-		}
 	}
 }
