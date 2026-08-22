@@ -121,11 +121,33 @@ func machineACMEFixture(certDir, domain string) *config.Config {
 	}
 }
 
-func captureZap() (*zap.Logger, *bytes.Buffer) {
-	var buf bytes.Buffer
+// lockedBuf is a bytes.Buffer that is safe for concurrent Write/String.
+// zapcore.AddSync alone does not serialize writes; go test -race flagged
+// two Managers sharing an unlocked buffer in the concurrent Start() test.
+type lockedBuf struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (w *lockedBuf) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.b.Write(p)
+}
+
+func (w *lockedBuf) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.b.String()
+}
+
+func captureZap() (*zap.Logger, *lockedBuf) {
+	buf := &lockedBuf{}
 	enc := zapcore.NewConsoleEncoder(zap.NewDevelopmentEncoderConfig())
-	core := zapcore.NewCore(enc, zapcore.AddSync(&buf), zapcore.InfoLevel)
-	return zap.New(core), &buf
+	// Lock the WriteSyncer as well so zap's own concurrent cores are serialized.
+	ws := zapcore.Lock(zapcore.AddSync(buf))
+	core := zapcore.NewCore(enc, ws, zapcore.InfoLevel)
+	return zap.New(core), buf
 }
 
 func countObtainedSuccessfully(log string) int {
