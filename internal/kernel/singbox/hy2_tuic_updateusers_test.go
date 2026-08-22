@@ -8,9 +8,11 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"fmt"
 	"math/big"
 	"net"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
@@ -133,6 +135,178 @@ func TestTUICUpdateUsers_ExistingConnKeepsTrafficOwner(t *testing.T) {
 		t.Fatalf("TUIC packet after hot update: got %q, want Alice", gotPkt)
 	}
 	assertTrackedToAlice(t, gotPkt, "tuic-udp")
+}
+
+func TestHysteria2UpdateUsers_UUIDSurvivesRemoveOneAndKeepsOthers(t *testing.T) {
+	// 審核 2：標識是 uuid／id，不是下標。刪掉清單最前面一人後，
+	// Alice／Dave 的已建立連接不得滑到別人（Frank／Eve）頭上。
+	in, router := newTestHysteria2Inbound(t, hy2TuicFiveUsers())
+	aliceCtx := auth.ContextWithUser(context.Background(), hy2TuicUserAlice)
+	daveCtx := auth.ContextWithUser(context.Background(), hy2TuicUserDave)
+
+	if err := in.UpdateUsers(hy2TuicUsersWithoutCarol()); err != nil {
+		t.Fatalf("UpdateUsers: %v", err)
+	}
+
+	if got := routeHy2Conn(t, in, router, aliceCtx); got != hy2TuicUserAlice {
+		t.Fatalf("Hy2 remove-one reassigned Alice uuid: got %q, want Alice (not Frank)", got)
+	}
+	if got := routeHy2Conn(t, in, router, daveCtx); got != hy2TuicUserDave {
+		t.Fatalf("Hy2 remove-one reassigned Dave uuid: got %q, want Dave (not Eve)", got)
+	}
+	assertTrackedToAlice(t, hy2TuicUserAlice, "hy2-remove-one")
+}
+
+func TestHysteria2UpdateUsers_EmptyListDoesNotRebindOrPanic(t *testing.T) {
+	in, router := newTestHysteria2Inbound(t, hy2TuicFiveUsers())
+	aliceCtx := auth.ContextWithUser(context.Background(), hy2TuicUserAlice)
+	indexCtx := auth.ContextWithUser(context.Background(), hy2TuicAliceIndex)
+
+	if err := in.UpdateUsers(nil); err != nil {
+		t.Fatalf("UpdateUsers empty: %v", err)
+	}
+
+	defer func() {
+		if rec := recover(); rec != nil {
+			t.Fatalf("Hy2 empty user list panicked: %v", rec)
+		}
+	}()
+	gotUUID := routeHy2Conn(t, in, router, aliceCtx)
+	if gotUUID != "" && gotUUID != hy2TuicUserAlice {
+		t.Fatalf("Hy2 empty list attributed Alice uuid conn to %q", gotUUID)
+	}
+	gotIdx := routeHy2Conn(t, in, router, indexCtx)
+	if gotIdx != "" && gotIdx != hy2TuicUserAlice {
+		t.Fatalf("Hy2 empty list attributed stale index to %q", gotIdx)
+	}
+}
+
+func TestTUICUpdateUsers_UUIDSurvivesRemoveOneAndKeepsOthers(t *testing.T) {
+	in, router := newTestTUICInbound(t, hy2TuicFiveTUICUsers())
+	aliceCtx := auth.ContextWithUser(context.Background(), hy2TuicUserAlice)
+	daveCtx := auth.ContextWithUser(context.Background(), hy2TuicUserDave)
+
+	if err := in.UpdateUsers(hy2TuicTUICUsersWithoutCarol()); err != nil {
+		t.Fatalf("UpdateUsers: %v", err)
+	}
+
+	if got := routeTUICConn(t, in, router, aliceCtx); got != hy2TuicUserAlice {
+		t.Fatalf("TUIC remove-one reassigned Alice uuid: got %q, want Alice (not Frank)", got)
+	}
+	if got := routeTUICConn(t, in, router, daveCtx); got != hy2TuicUserDave {
+		t.Fatalf("TUIC remove-one reassigned Dave uuid: got %q, want Dave (not Eve)", got)
+	}
+	assertTrackedToAlice(t, hy2TuicUserAlice, "tuic-remove-one")
+}
+
+func TestTUICUpdateUsers_EmptyListDoesNotRebindOrPanic(t *testing.T) {
+	in, router := newTestTUICInbound(t, hy2TuicFiveTUICUsers())
+	aliceCtx := auth.ContextWithUser(context.Background(), hy2TuicUserAlice)
+	indexCtx := auth.ContextWithUser(context.Background(), hy2TuicAliceIndex)
+
+	if err := in.UpdateUsers(nil); err != nil {
+		t.Fatalf("UpdateUsers empty: %v", err)
+	}
+
+	defer func() {
+		if rec := recover(); rec != nil {
+			t.Fatalf("TUIC empty user list panicked: %v", rec)
+		}
+	}()
+	gotUUID := routeTUICConn(t, in, router, aliceCtx)
+	if gotUUID != "" && gotUUID != hy2TuicUserAlice {
+		t.Fatalf("TUIC empty list attributed Alice uuid conn to %q", gotUUID)
+	}
+	gotIdx := routeTUICConn(t, in, router, indexCtx)
+	if gotIdx != "" && gotIdx != hy2TuicUserAlice {
+		t.Fatalf("TUIC empty list attributed stale index to %q", gotIdx)
+	}
+}
+
+func TestHy2TUICUpdateUsers_HotReloadLogEvidence(t *testing.T) {
+	// 審核 2：熱更新日誌當證據。必須走 UpdateUsers，不准重啟 inbound／kernel。
+	var lines []string
+	logf := func(format string, args ...any) {
+		lines = append(lines, fmt.Sprintf(format, args...))
+	}
+
+	hy2In, hy2R := newTestHysteria2Inbound(t, hy2TuicFiveUsers())
+	tuicIn, tuicR := newTestTUICInbound(t, hy2TuicFiveTUICUsers())
+	aliceIdx := auth.ContextWithUser(context.Background(), hy2TuicAliceIndex)
+	aliceUUID := auth.ContextWithUser(context.Background(), hy2TuicUserAlice)
+	daveUUID := auth.ContextWithUser(context.Background(), hy2TuicUserDave)
+
+	beforeHy2 := routeHy2Conn(t, hy2In, hy2R, aliceIdx)
+	beforeTUIC := routeTUICConn(t, tuicIn, tuicR, aliceIdx)
+	logf("before hy2 user=%s traffic_owner=%s path=hot-update", beforeHy2, beforeHy2)
+	logf("before tuic user=%s traffic_owner=%s path=hot-update", beforeTUIC, beforeTUIC)
+
+	if err := hy2In.UpdateUsers(hy2TuicUsersWithoutCarol()); err != nil {
+		t.Fatalf("hy2 UpdateUsers: %v", err)
+	}
+	if err := tuicIn.UpdateUsers(hy2TuicTUICUsersWithoutCarol()); err != nil {
+		t.Fatalf("tuic UpdateUsers: %v", err)
+	}
+	logf("update hy2 path=UpdateUsers from=5 to=4 removed=%s restart=false", hy2TuicUserCarol)
+	logf("update tuic path=UpdateUsers from=5 to=4 removed=%s restart=false", hy2TuicUserCarol)
+
+	defer func() {
+		if rec := recover(); rec != nil {
+			t.Fatalf("hot update log path panicked: %v", rec)
+		}
+	}()
+
+	afterHy2Alice := routeHy2Conn(t, hy2In, hy2R, aliceUUID)
+	afterHy2Dave := routeHy2Conn(t, hy2In, hy2R, daveUUID)
+	afterTUICAlice := routeTUICConn(t, tuicIn, tuicR, aliceUUID)
+	afterTUICDave := routeTUICConn(t, tuicIn, tuicR, daveUUID)
+	logf("after hy2 alice_uuid user=%s traffic_owner=%s panic=false", afterHy2Alice, afterHy2Alice)
+	logf("after hy2 dave_uuid user=%s traffic_owner=%s panic=false", afterHy2Dave, afterHy2Dave)
+	logf("after tuic alice_uuid user=%s traffic_owner=%s panic=false", afterTUICAlice, afterTUICAlice)
+	logf("after tuic dave_uuid user=%s traffic_owner=%s panic=false", afterTUICDave, afterTUICDave)
+
+	if err := hy2In.UpdateUsers(nil); err != nil {
+		t.Fatalf("hy2 empty: %v", err)
+	}
+	if err := tuicIn.UpdateUsers(nil); err != nil {
+		t.Fatalf("tuic empty: %v", err)
+	}
+	emptyHy2 := routeHy2Conn(t, hy2In, hy2R, aliceUUID)
+	emptyTUIC := routeTUICConn(t, tuicIn, tuicR, aliceUUID)
+	logf("empty hy2 alice_uuid user=%s panic=false", emptyHy2)
+	logf("empty tuic alice_uuid user=%s panic=false", emptyTUIC)
+
+	t.Log("\n" + strings.Join(lines, "\n"))
+	if afterHy2Alice != hy2TuicUserAlice || afterHy2Dave != hy2TuicUserDave {
+		t.Fatalf("hy2 hot-update log: alice=%q dave=%q", afterHy2Alice, afterHy2Dave)
+	}
+	if afterTUICAlice != hy2TuicUserAlice || afterTUICDave != hy2TuicUserDave {
+		t.Fatalf("tuic hot-update log: alice=%q dave=%q", afterTUICAlice, afterTUICDave)
+	}
+	if emptyHy2 != "" && emptyHy2 != hy2TuicUserAlice {
+		t.Fatalf("hy2 empty list rebound alice to %q", emptyHy2)
+	}
+	if emptyTUIC != "" && emptyTUIC != hy2TuicUserAlice {
+		t.Fatalf("tuic empty list rebound alice to %q", emptyTUIC)
+	}
+}
+
+func hy2TuicUsersWithoutCarol() []option.Hysteria2User {
+	return []option.Hysteria2User{
+		{Name: hy2TuicUserDave, Password: hy2TuicUserDave},
+		{Name: hy2TuicUserEve, Password: hy2TuicUserEve},
+		{Name: hy2TuicUserAlice, Password: hy2TuicUserAlice},
+		{Name: hy2TuicUserFrank, Password: hy2TuicUserFrank},
+	}
+}
+
+func hy2TuicTUICUsersWithoutCarol() []option.TUICUser {
+	return []option.TUICUser{
+		{Name: hy2TuicUserDave, UUID: hy2TuicUserDave, Password: hy2TuicUserDave},
+		{Name: hy2TuicUserEve, UUID: hy2TuicUserEve, Password: hy2TuicUserEve},
+		{Name: hy2TuicUserAlice, UUID: hy2TuicUserAlice, Password: hy2TuicUserAlice},
+		{Name: hy2TuicUserFrank, UUID: hy2TuicUserFrank, Password: hy2TuicUserFrank},
+	}
 }
 
 func TestTUICUpdateUsers_ShortListDoesNotPanic(t *testing.T) {
