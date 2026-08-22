@@ -98,6 +98,7 @@ func (s *SingBox) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls 
 	defer s.mu.Unlock()
 
 	cfgMap := buildConfig(s.cfg, nodeConfig, users, tls)
+	stripHy2HopListenFields(cfgMap)
 	data, err := json.Marshal(cfgMap)
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
@@ -108,6 +109,7 @@ func (s *SingBox) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls 
 	ctx, cancel := context.WithCancel(context.Background())
 	ctx = include.Context(ctx)
 	overrideHy2TUICInbounds(ctx)
+	ctx = hy2inbound.WithRange(ctx, hy2HopRange(nodeConfig))
 
 	opts, err := singJSON.UnmarshalExtendedContext[option.Options](ctx, data)
 	if err != nil {
@@ -206,6 +208,7 @@ func (s *SingBox) Reload(nodeConfig *model.NodeSpec, users []model.UserSpec, tls
 	}
 
 	cfgMap := buildConfig(s.cfg, nodeConfig, users, tls)
+	stripHy2HopListenFields(cfgMap)
 	data, err := json.Marshal(cfgMap)
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
@@ -301,7 +304,7 @@ func (s *SingBox) Reload(nodeConfig *model.NodeSpec, users []model.UserSpec, tls
 		// The brief listen gap (< 1 ms) is far less disruptive than a full restart.
 		_ = im.Remove(tag) // ignore error when tag doesn't exist yet
 		logger := nopFactory.NewLogger(fmt.Sprintf("inbound/%s[%s]", inb.Type, tag))
-		if err := im.Create(s.ctx, router, logger, tag, inb.Type, inb.Options); err != nil {
+		if err := im.Create(hy2inbound.WithRange(s.ctx, hy2HopRange(nodeConfig)), router, logger, tag, inb.Type, inb.Options); err != nil {
 			return fmt.Errorf("recreate inbound %s: %w", tag, err)
 		}
 	}
@@ -571,6 +574,7 @@ func mergeUsersByID(base, overlay []model.UserSpec) []model.UserSpec {
 // Must be called with s.mu held.
 func (s *SingBox) reloadInboundsLocked(users []model.UserSpec) error {
 	cfgMap := buildConfig(s.cfg, s.nodeConfig, users, s.tls)
+	stripHy2HopListenFields(cfgMap)
 	data, err := json.Marshal(cfgMap)
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
@@ -648,7 +652,7 @@ func (s *SingBox) reloadInboundsLocked(users []model.UserSpec) error {
 
 		_ = im.Remove(tag)
 		logger := nopFactory.NewLogger(fmt.Sprintf("inbound/%s[%s]", inb.Type, tag))
-		if err := im.Create(s.ctx, router, logger, tag, inb.Type, inb.Options); err != nil {
+		if err := im.Create(hy2inbound.WithRange(s.ctx, hy2HopRange(s.nodeConfig)), router, logger, tag, inb.Type, inb.Options); err != nil {
 			return fmt.Errorf("recreate inbound %s: %w", tag, err)
 		}
 	}
@@ -714,4 +718,30 @@ func overrideHy2TUICInbounds(ctx context.Context) {
 	}
 	hy2inbound.RegisterInbound(reg)
 	tuicinbound.RegisterInbound(reg)
+}
+
+func hy2HopRange(nc *model.NodeSpec) hy2inbound.Range {
+	if nc == nil {
+		return hy2inbound.Range{}
+	}
+	start, end, ok := parseListenPortRange(nc.ServerPortRange)
+	if !ok {
+		return hy2inbound.Range{}
+	}
+	return hy2inbound.Range{Start: start, End: end}
+}
+
+func stripHy2HopListenFields(cfg M) {
+	raw, ok := cfg["inbounds"]
+	if !ok {
+		return
+	}
+	inbounds, ok := raw.([]M)
+	if !ok {
+		return
+	}
+	for _, inbound := range inbounds {
+		delete(inbound, "listen_port_range")
+		delete(inbound, "listen_ports")
+	}
 }

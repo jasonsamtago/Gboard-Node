@@ -71,8 +71,8 @@ type MachineNode struct {
 
 // MachineNodesResponse is the response from GET /api/v2/server/machine/nodes.
 type MachineNodesResponse struct {
-	Nodes      []MachineNode      `json:"nodes"`
-	BaseConfig MachineBaseConfig  `json:"base_config"`
+	Nodes      []MachineNode     `json:"nodes"`
+	BaseConfig MachineBaseConfig `json:"base_config"`
 }
 
 // MachineBaseConfig holds polling intervals for machine mode.
@@ -84,10 +84,13 @@ type MachineBaseConfig struct {
 // NodeConfig is the response from GET /api/v1/server/UniProxy/config
 type NodeConfig struct {
 	// NodeID is populated in machine-mode WS events for routing.
-	NodeID          int                    `json:"node_id,omitempty"`
-	Protocol        string                 `json:"protocol"`
-	ListenIP        string                 `json:"listen_ip"`
-	ServerPort      int                    `json:"server_port"`
+	NodeID     int    `json:"node_id,omitempty"`
+	Protocol   string `json:"protocol"`
+	ListenIP   string `json:"listen_ip"`
+	ServerPort int    `json:"server_port"`
+	// ServerPortRange 保存面板下發的完整服務端口區間（如 26598-36598）。
+	// 單端口為空；不准只留起點。
+	ServerPortRange string                 `json:"server_port_range,omitempty"`
 	Network         string                 `json:"network"`
 	NetworkSettings map[string]interface{} `json:"networkSettings"`
 	BaseConfig      BaseConfig             `json:"base_config"`

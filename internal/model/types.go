@@ -3,9 +3,12 @@ package model
 import "github.com/jasonsamtago/Gboard-Node/internal/config"
 
 type NodeSpec struct {
-	Protocol        string
-	ListenIP        string
-	ServerPort      int
+	Protocol   string
+	ListenIP   string
+	ServerPort int
+	// ServerPortRange 是 Hy2 端口跳躍的完整聽區間（如 26598-36598）。
+	// 空字串代表單端口，只聽 ServerPort。
+	ServerPortRange string
 	Network         string
 	NetworkSettings map[string]any
 	Routes          []RouteRule

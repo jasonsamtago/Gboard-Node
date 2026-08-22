@@ -8,11 +8,11 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/jasonsamtago/Gboard-Node/internal/config"
 	"github.com/jasonsamtago/Gboard-Node/internal/kernel"
 	"github.com/jasonsamtago/Gboard-Node/internal/model"
 	"github.com/jasonsamtago/Gboard-Node/internal/nlog"
-	"github.com/go-viper/mapstructure/v2"
 )
 
 // M is a shorthand for building JSON-like maps
@@ -435,6 +435,7 @@ func buildInbound(nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert)
 		"listen":      "::",
 		"listen_port": nc.ServerPort,
 	}
+	applyHy2ListenRange(base, nc)
 
 	switch nc.Protocol {
 	case "shadowsocks":
@@ -634,6 +635,38 @@ func buildTrojan(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel.T
 	}
 
 	return base
+}
+
+// applyHy2ListenRange 把面板區間寫進 sing-box inbound 的 listen 規格。
+// cedar sing-box 的 listen_port 只能是單一 uint16，所以區間用 listen_port_range
+// （以及 sing-box 風格的 listen_ports start:end）表達完整 hop；單端口不寫這些欄位。
+func applyHy2ListenRange(base M, nc *model.NodeSpec) {
+	if nc == nil || nc.Protocol != "hysteria" {
+		return
+	}
+	start, end, ok := parseListenPortRange(nc.ServerPortRange)
+	if !ok || end <= start {
+		return
+	}
+	base["listen_port_range"] = fmt.Sprintf("%d-%d", start, end)
+	base["listen_ports"] = []string{fmt.Sprintf("%d:%d", start, end)}
+}
+
+func parseListenPortRange(raw string) (int, int, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, 0, false
+	}
+	a, b, ok := strings.Cut(raw, "-")
+	if !ok || strings.Contains(b, "-") {
+		return 0, 0, false
+	}
+	start, err1 := strconv.Atoi(strings.TrimSpace(a))
+	end, err2 := strconv.Atoi(strings.TrimSpace(b))
+	if err1 != nil || err2 != nil || start < 1 || end > 65535 || start > end {
+		return 0, 0, false
+	}
+	return start, end, true
 }
 
 func buildHysteria(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) M {
