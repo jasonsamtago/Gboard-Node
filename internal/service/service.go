@@ -76,6 +76,10 @@ type Service struct {
 
 	// metricsMu: lastUsers, lastConfig, wsClient, wsDisconnectAt (buildMetrics vs main loop).
 	metricsMu sync.RWMutex
+
+	// kernelWatchInterval is how often WatchKernel runs. 0 = 15s default.
+	// Tests may shorten it; production uses the default.
+	kernelWatchInterval time.Duration
 }
 
 // pullResult carries the outcome of an async pullViaAPI back to the main goroutine.
@@ -193,12 +197,14 @@ func (s *Service) Run(ctx context.Context) error {
 	// if WS has been enabled. When WS is disconnected for too long, re-check
 	// if it's still available.
 	wsDiscoveryTicker := time.NewTicker(time.Duration(s.cfg.WS.DiscoveryInterval) * time.Second)
+	watchTicker := time.NewTicker(kernelWatchInterval(s))
 
 	defer trackTicker.Stop()
 	defer reportTicker.Stop()
 	defer pullTicker.Stop()
 	defer deviceReportTicker.Stop()
 	defer wsDiscoveryTicker.Stop()
+	defer watchTicker.Stop()
 
 	s.startWSClient(ctx)
 
@@ -210,6 +216,9 @@ func (s *Service) Run(ctx context.Context) error {
 
 		case <-trackTicker.C:
 			s.trackAndEnforce(ctx)
+
+		case <-watchTicker.C:
+			s.WatchKernel()
 
 		case <-reportTicker.C:
 			s.pushReportAsync()

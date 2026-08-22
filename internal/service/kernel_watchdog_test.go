@@ -67,6 +67,7 @@ func TestKernelWatchdog_ProcessExitRestartsKernel(t *testing.T) {
 		t.Fatal("不准 docker rm 當修")
 	}
 	writeWatchdogEvidence(t, "watchdog_process_exit.log", logText)
+	t.Logf("進程退出證據 startCalls=%d\n%s", k.startCalls, logText)
 }
 
 func TestKernelWatchdog_UDPListenGoneRestartsKernel(t *testing.T) {
@@ -97,6 +98,7 @@ func TestKernelWatchdog_UDPListenGoneRestartsKernel(t *testing.T) {
 		t.Fatal("不准 docker rm 當修")
 	}
 	writeWatchdogEvidence(t, "watchdog_udp_missing.log", logText)
+	t.Logf("UDP 消失證據 startCalls=%d\n%s", k.startCalls, logText)
 }
 
 func TestKernelWatchdog_HealthyKernelNotRestarted(t *testing.T) {
@@ -125,6 +127,7 @@ func TestKernelWatchdog_HealthyKernelNotRestarted(t *testing.T) {
 		t.Fatalf("健康 kernel 日誌不該寫 restart:\n%s", logText)
 	}
 	writeWatchdogEvidence(t, "watchdog_healthy_skip.log", logText)
+	t.Logf("健康不重啟證據 startCalls=%d\n%s", k.startCalls, logText)
 }
 
 func TestKernelWatchdog_TCPProtocolMissingUDPIsNotUnhealthy(t *testing.T) {
@@ -142,6 +145,7 @@ func TestKernelWatchdog_TCPProtocolMissingUDPIsNotUnhealthy(t *testing.T) {
 		t.Fatalf("VLESS 不該因沒有 UDP 而重拉:\n%s", logText)
 	}
 	writeWatchdogEvidence(t, "watchdog_tcp_no_udp_skip.log", logText)
+	t.Logf("TCP 無 UDP 不重啟證據 startCalls=%d\n%s", k.startCalls, logText)
 }
 
 func invokeWatchKernel(t *testing.T, s *Service) {
@@ -212,7 +216,13 @@ func udpPortListening(port int) bool {
 
 func writeWatchdogEvidence(t *testing.T, name, text string) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(t.TempDir(), name), []byte(text+"\n"), 0o644); err != nil {
+	body := []byte(text + "\n")
+	if err := os.WriteFile(filepath.Join(t.TempDir(), name), body, 0o644); err != nil {
 		t.Fatalf("write evidence: %v", err)
+	}
+	if _, err := os.Stat("/opt/cursor/artifacts"); err == nil {
+		if err := os.WriteFile(filepath.Join("/opt/cursor/artifacts", name), body, 0o644); err != nil {
+			t.Logf("artifacts copy skipped: %v", err)
+		}
 	}
 }
