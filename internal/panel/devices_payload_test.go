@@ -159,4 +159,3 @@ func (w *devicesLogBuf) String() string {
 	defer w.mu.Unlock()
 	return w.b.String()
 }
-

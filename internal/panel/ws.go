@@ -10,8 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/jasonsamtago/Gboard-Node/internal/nlog"
 	"github.com/gorilla/websocket"
+	"github.com/jasonsamtago/Gboard-Node/internal/nlog"
 )
 
 // WSEvent types
