@@ -12,21 +12,25 @@ import (
 	"math/big"
 	"net"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jasonsamtago/Gboard-Node/internal/kernel/singbox/hy2inbound"
+	"github.com/jasonsamtago/Gboard-Node/internal/kernel/singbox/tuicinbound"
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/include"
 	singLog "github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
-	hy2 "github.com/sagernet/sing-box/protocol/hysteria2"
-	"github.com/sagernet/sing-box/protocol/tuic"
 	"github.com/sagernet/sing-tun"
 	"github.com/sagernet/sing/common/auth"
 	"github.com/sagernet/sing/common/buf"
 	"github.com/sagernet/sing/common/json/badoption"
 	singM "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/service"
 )
 
 // Official cedar2025/Xboard-Node #54: Hy2 / TUIC UpdateUsers write the array
@@ -50,9 +54,24 @@ const (
 	hy2TuicBobID      = 99
 )
 
+func TestOverrideHy2TUICInboundsRegisters(t *testing.T) {
+	ctx := include.Context(context.Background())
+	overrideHy2TUICInbounds(ctx)
+	reg := service.FromContext[adapter.InboundRegistry](ctx)
+	if reg == nil {
+		t.Fatal("missing inbound registry")
+	}
+	if _, ok := reg.CreateOptions("hysteria2"); !ok {
+		t.Fatal("hysteria2 constructor not registered after override")
+	}
+	if _, ok := reg.CreateOptions("tuic"); !ok {
+		t.Fatal("tuic constructor not registered after override")
+	}
+}
+
 func TestHysteria2UpdateUsers_ExistingConnKeepsTrafficOwner(t *testing.T) {
 	in, router := newTestHysteria2Inbound(t, hy2TuicFiveUsers())
-	ctx := auth.ContextWithUser(context.Background(), hy2TuicAliceIndex)
+	ctx := auth.ContextWithUser(context.Background(), hy2TuicUserAlice)
 
 	if got := routeHy2Conn(t, in, router, ctx); got != hy2TuicUserAlice {
 		t.Fatalf("precondition: existing Hy2 conn user = %q, want Alice", got)
@@ -109,7 +128,7 @@ func TestHysteria2UpdateUsers_ShortListDoesNotPanic(t *testing.T) {
 
 func TestTUICUpdateUsers_ExistingConnKeepsTrafficOwner(t *testing.T) {
 	in, router := newTestTUICInbound(t, hy2TuicFiveTUICUsers())
-	ctx := auth.ContextWithUser(context.Background(), hy2TuicAliceIndex)
+	ctx := auth.ContextWithUser(context.Background(), hy2TuicUserAlice)
 
 	if got := routeTUICConn(t, in, router, ctx); got != hy2TuicUserAlice {
 		t.Fatalf("precondition: existing TUIC conn user = %q, want Alice", got)
@@ -232,14 +251,13 @@ func TestHy2TUICUpdateUsers_HotReloadLogEvidence(t *testing.T) {
 
 	hy2In, hy2R := newTestHysteria2Inbound(t, hy2TuicFiveUsers())
 	tuicIn, tuicR := newTestTUICInbound(t, hy2TuicFiveTUICUsers())
-	aliceIdx := auth.ContextWithUser(context.Background(), hy2TuicAliceIndex)
 	aliceUUID := auth.ContextWithUser(context.Background(), hy2TuicUserAlice)
 	daveUUID := auth.ContextWithUser(context.Background(), hy2TuicUserDave)
 
-	beforeHy2 := routeHy2Conn(t, hy2In, hy2R, aliceIdx)
-	beforeTUIC := routeTUICConn(t, tuicIn, tuicR, aliceIdx)
-	logf("before hy2 user=%s traffic_owner=%s path=hot-update", beforeHy2, beforeHy2)
-	logf("before tuic user=%s traffic_owner=%s path=hot-update", beforeTUIC, beforeTUIC)
+	beforeHy2 := routeHy2Conn(t, hy2In, hy2R, aliceUUID)
+	beforeTUIC := routeTUICConn(t, tuicIn, tuicR, aliceUUID)
+	logf("before hy2 alice_uuid user=%s traffic_owner=%s path=UpdateUsers restart=false", beforeHy2, beforeHy2)
+	logf("before tuic alice_uuid user=%s traffic_owner=%s path=UpdateUsers restart=false", beforeTUIC, beforeTUIC)
 
 	if err := hy2In.UpdateUsers(hy2TuicUsersWithoutCarol()); err != nil {
 		t.Fatalf("hy2 UpdateUsers: %v", err)
@@ -276,7 +294,16 @@ func TestHy2TUICUpdateUsers_HotReloadLogEvidence(t *testing.T) {
 	logf("empty hy2 alice_uuid user=%s panic=false", emptyHy2)
 	logf("empty tuic alice_uuid user=%s panic=false", emptyTUIC)
 
-	t.Log("\n" + strings.Join(lines, "\n"))
+	logText := strings.Join(lines, "\n")
+	t.Log("\n" + logText)
+	if dir := os.Getenv("HY2_TUIC_HOTUPDATE_LOG_DIR"); dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("hot-update log dir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "hy2_tuic_hotupdate.log"), []byte(logText+"\n"), 0o644); err != nil {
+			t.Fatalf("hot-update log: %v", err)
+		}
+	}
 	if afterHy2Alice != hy2TuicUserAlice || afterHy2Dave != hy2TuicUserDave {
 		t.Fatalf("hy2 hot-update log: alice=%q dave=%q", afterHy2Alice, afterHy2Dave)
 	}
@@ -371,7 +398,7 @@ type tuicInbound interface {
 func newTestHysteria2Inbound(t *testing.T, users []option.Hysteria2User) (hy2Inbound, *captureRouter) {
 	t.Helper()
 	router := &captureRouter{}
-	raw, err := hy2.NewInbound(context.Background(), router, singLog.NewNOPFactory().Logger(), "hy2-in", option.Hysteria2InboundOptions{
+	raw, err := hy2inbound.NewInbound(context.Background(), router, singLog.NewNOPFactory().Logger(), "hy2-in", option.Hysteria2InboundOptions{
 		ListenOptions: option.ListenOptions{
 			Listen:     hy2TuicListenAddr(),
 			ListenPort: 18443,
@@ -394,7 +421,7 @@ func newTestHysteria2Inbound(t *testing.T, users []option.Hysteria2User) (hy2Inb
 func newTestTUICInbound(t *testing.T, users []option.TUICUser) (tuicInbound, *captureRouter) {
 	t.Helper()
 	router := &captureRouter{}
-	raw, err := tuic.NewInbound(context.Background(), router, singLog.NewNOPFactory().Logger(), "tuic-in", option.TUICInboundOptions{
+	raw, err := tuicinbound.NewInbound(context.Background(), router, singLog.NewNOPFactory().Logger(), "tuic-in", option.TUICInboundOptions{
 		ListenOptions: option.ListenOptions{
 			Listen:     hy2TuicListenAddr(),
 			ListenPort: 18444,
