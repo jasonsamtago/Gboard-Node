@@ -1188,14 +1188,11 @@ func dropUnusableInboundCertificatePaths(inbound M) {
 }
 
 func inboundTLSMap(v any) M {
-	switch tls := v.(type) {
-	case M:
-		return tls
-	case map[string]any:
-		return M(tls)
-	default:
+	tls, ok := v.(M)
+	if !ok {
 		return nil
 	}
+	return tls
 }
 
 func inboundHasInlinePEM(tlsObj M) bool {
