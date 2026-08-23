@@ -15,9 +15,9 @@ import (
 	"github.com/xtls/xray-core/common/protocol"
 	"github.com/xtls/xray-core/common/uuid"
 	xrayCore "github.com/xtls/xray-core/core"
+	featurebandwidth "github.com/xtls/xray-core/features/bandwidth"
 	"github.com/xtls/xray-core/features/inbound"
 	"github.com/xtls/xray-core/features/stats"
-	featurebandwidth "github.com/xtls/xray-core/features/bandwidth"
 	"github.com/xtls/xray-core/infra/conf/serial"
 	xrayProxy "github.com/xtls/xray-core/proxy"
 	"github.com/xtls/xray-core/proxy/shadowsocks"
@@ -32,8 +32,8 @@ import (
 	"github.com/jasonsamtago/Gboard-Node/internal/config"
 	"github.com/jasonsamtago/Gboard-Node/internal/kernel"
 	"github.com/jasonsamtago/Gboard-Node/internal/kernel/geodata"
-	"github.com/jasonsamtago/Gboard-Node/internal/nlog"
 	"github.com/jasonsamtago/Gboard-Node/internal/model"
+	"github.com/jasonsamtago/Gboard-Node/internal/nlog"
 )
 
 const (
@@ -68,6 +68,7 @@ type Xray struct {
 	lastKernelHash  string
 	cumTraffic      map[int][2]int64
 	speedLimitFunc  func(string) *rate.Limiter
+	hostProxy       *hostProxy
 
 	// running is set after a successful Start and cleared before shutdown.
 	// Atomic so IsRunning / GetConnections never block.
@@ -118,13 +119,20 @@ func (x *Xray) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls ker
 	// ── Phase 1: Build config (no shared state) ─────────────────────────
 	x.ensureGeoData(nodeConfig)
 
-	data, err := marshalConfig(x.cfg, nodeConfig, users, tls)
+	listenSpec, proxy, err := maybeStartTCPHTTPHostProxy(nodeConfig)
 	if err != nil {
+		return err
+	}
+
+	data, err := marshalConfig(x.cfg, listenSpec, users, tls)
+	if err != nil {
+		closeHostProxy(proxy)
 		return err
 	}
 
 	pbConfig, err := serial.LoadJSONConfig(bytes.NewReader(data))
 	if err != nil {
+		closeHostProxy(proxy)
 		return fmt.Errorf("parse xray config: %w", err)
 	}
 
@@ -134,12 +142,14 @@ func (x *Xray) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls ker
 	ld := globalLimitDispatcher.Load()
 	xrayCreationMu.Unlock()
 	if err != nil {
+		closeHostProxy(proxy)
 		return fmt.Errorf("create xray: %w", err)
 	}
 
 	// ── Phase 3: Start new (no lock, potentially slow) ──────────────────
 	if err := startWithTimeout(inst, startTimeout); err != nil {
 		inst.Close()
+		closeHostProxy(proxy)
 		return err
 	}
 
@@ -147,8 +157,10 @@ func (x *Xray) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls ker
 	x.mu.Lock()
 	old := x.instance
 	oldLD := x.limitDispatcher
+	oldProxy := x.hostProxy
 	x.instance = inst
 	x.limitDispatcher = ld
+	x.hostProxy = proxy
 	x.users = users
 	x.nodeConfig = nodeConfig
 	x.tls = tls
@@ -160,6 +172,7 @@ func (x *Xray) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls ker
 	x.mu.Unlock()
 
 	// ── Phase 5: Recycle old (background, non-blocking) ─────────────────
+	closeHostProxy(oldProxy)
 	closeOld(old, oldLD)
 
 	x.updateDispatcherLimits(users)
@@ -203,9 +216,12 @@ func (x *Xray) Stop() {
 	x.mu.Lock()
 	inst := x.instance
 	ld := x.limitDispatcher
+	proxy := x.hostProxy
 	x.instance = nil
 	x.limitDispatcher = nil
+	x.hostProxy = nil
 	x.mu.Unlock()
+	closeHostProxy(proxy)
 
 	if ld != nil {
 		drainConns(ld, drainTimeout)
@@ -314,7 +330,7 @@ func (x *Xray) AddUsers(users []model.UserSpec) (int, error) {
 		x.users = merged
 		x.mu.Unlock()
 		x.updateDispatcherLimits(merged)
-	x.updateBandwidthLimits(merged)
+		x.updateBandwidthLimits(merged)
 		return 0, nil
 	}
 
