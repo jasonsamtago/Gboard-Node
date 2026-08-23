@@ -32,7 +32,7 @@ func TestMuxSessionClose_TrackLinkPipeReaderXUDPMustNotPanic(t *testing.T) {
 
 	pipeReader, _ := pipe.New()
 	link := &transport.Link{Reader: pipeReader, Writer: buf.Discard}
-	ld.trackLink(link, email, "9.9.9.9", true)
+	ld.trackLink(link, email, "9.9.9.9", true, nil)
 
 	if link.Reader != pipeReader {
 		t.Fatalf("真實 trackLink 之後 Reader 必須仍是同一個 *pipe.Reader，got %T", link.Reader)
@@ -57,7 +57,7 @@ func TestMuxSessionClose_NonXUDPCloseRunsDeviceLimitCallback(t *testing.T) {
 
 	pipeReader, _ := pipe.New()
 	link := &transport.Link{Reader: pipeReader, Writer: buf.Discard}
-	ld.trackLink(link, email, "9.9.9.9", true)
+	ld.trackLink(link, email, "9.9.9.9", true, nil)
 	if _, ok := link.Reader.(*pipe.Reader); !ok {
 		t.Fatalf("真實 trackLink 之後 Reader 必須仍是 *pipe.Reader，got %T", link.Reader)
 	}
