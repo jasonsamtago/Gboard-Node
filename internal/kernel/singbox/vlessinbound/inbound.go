@@ -1,6 +1,5 @@
-// Package vlessinbound replaces cedar2025/sing-box VLESS inbound so ws 設了
-// Host 時，listener 會先核對 HTTP Host。cedar websocket server 只把
-// headers.Host 當回應 header，不擋錯 Host。
+// Package vlessinbound 只在 cleartext ws 設了 Host 時覆寫 VLESS inbound，
+// 先核對 HTTP Host。沒設 Host、或 TLS VLESS，必須走官方 inbound。
 package vlessinbound
 
 import (
@@ -18,6 +17,7 @@ import (
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
+	protocolvless "github.com/sagernet/sing-box/protocol/vless"
 	"github.com/sagernet/sing-box/transport/v2ray"
 	"github.com/sagernet/sing-vmess/packetaddr"
 	"github.com/sagernet/sing-vmess/vless"
@@ -51,6 +51,9 @@ type Inbound struct {
 }
 
 func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.VLESSInboundOptions) (adapter.Inbound, error) {
+	if !shouldFilterWSHost(options) {
+		return protocolvless.NewInbound(ctx, router, logger, tag, options)
+	}
 	inbound := &Inbound{
 		Adapter:     inbound.NewAdapter(C.TypeVLESS, tag),
 		ctx:         ctx,
@@ -122,7 +125,9 @@ func (h *Inbound) Start(stage adapter.StartStage) error {
 		if err != nil {
 			return err
 		}
-		tcpListener = hostfilter.WrapListener(tcpListener, h.requestHost)
+		if h.requestHost != "" && h.tlsConfig == nil {
+			tcpListener = hostfilter.WrapListener(tcpListener, h.requestHost)
+		}
 		go func() {
 			sErr := h.transport.Serve(tcpListener)
 			if sErr != nil && !E.IsClosed(sErr) {
@@ -226,6 +231,18 @@ func (h *inboundTransportHandler) NewConnectionEx(ctx context.Context, conn net.
 	//nolint:staticcheck
 	h.logger.InfoContext(ctx, "inbound connection from ", metadata.Source)
 	(*Inbound)(h).NewConnectionEx(ctx, conn, metadata, onClose)
+}
+
+// shouldFilterWSHost is true only for cleartext ws+Host.
+// TLS 時第一包是 ClientHello，raw peek 會把握手掐掉；沒設 Host 必須走官方 inbound。
+func shouldFilterWSHost(options option.VLESSInboundOptions) bool {
+	if websocketRequestHost(options) == "" {
+		return false
+	}
+	if options.TLS != nil && options.TLS.Enabled {
+		return false
+	}
+	return true
 }
 
 func websocketRequestHost(options option.VLESSInboundOptions) string {
