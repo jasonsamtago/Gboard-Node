@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -577,32 +578,35 @@ func buildInbound(nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert)
 	}
 	applyHy2ListenRange(base, nc)
 
+	var inbound M
 	switch nc.Protocol {
 	case "shadowsocks":
-		return buildShadowsocks(base, nc, users)
+		inbound = buildShadowsocks(base, nc, users)
 	case "vmess":
-		return buildVMess(base, nc, users, tc)
+		inbound = buildVMess(base, nc, users, tc)
 	case "vless":
-		return buildVLESS(base, nc, users, tc)
+		inbound = buildVLESS(base, nc, users, tc)
 	case "trojan":
-		return buildTrojan(base, nc, users, tc)
+		inbound = buildTrojan(base, nc, users, tc)
 	case "hysteria":
-		return buildHysteria(base, nc, users, tc)
+		inbound = buildHysteria(base, nc, users, tc)
 	case "tuic":
-		return buildTUIC(base, nc, users, tc)
+		inbound = buildTUIC(base, nc, users, tc)
 	case "anytls":
-		return buildAnyTLS(base, nc, users, tc)
+		inbound = buildAnyTLS(base, nc, users, tc)
 	case "naive":
-		return buildNaive(base, nc, users, tc)
+		inbound = buildNaive(base, nc, users, tc)
 	case "socks":
-		return buildSocks(base, users)
+		inbound = buildSocks(base, users)
 	case "http":
-		return buildHTTP(base, nc, users, tc)
+		inbound = buildHTTP(base, nc, users, tc)
 	case "mieru":
-		return buildMieru(base, nc, users)
+		inbound = buildMieru(base, nc, users)
 	default:
 		return nil
 	}
+	dropUnusableInboundCertificatePaths(inbound)
+	return inbound
 }
 
 func buildMieru(base M, nc *model.NodeSpec, users []model.UserSpec) M {
@@ -1117,8 +1121,15 @@ func settingsStringList(v any) []string {
 
 // buildTLSConfig returns sing-box inbound TLS options when certificate material
 // is available. Returns nil if no TLS material is provided.
+//
+// 沒有可用 PEM（!HasCert()／空字串）就不設 inbound TLS，也不寫
+// certificate_path／key_path。tls=1 但憑證空（nginx 終止 TLS、常見於
+// cert_mode=none）時，寫死 self-signed 路徑會讓 box.New 直接
+// open self-signed: no such file or directory。
 func buildTLSConfig(nc *model.NodeSpec, tc kernel.TLSCert) M {
-	if !tc.HasCert() {
+	certPEM := strings.TrimSpace(string(tc.CertPEM))
+	keyPEM := strings.TrimSpace(string(tc.KeyPEM))
+	if !tc.HasCert() || certPEM == "" || keyPEM == "" {
 		return nil
 	}
 
@@ -1145,10 +1156,102 @@ func buildTLSConfig(nc *model.NodeSpec, tc kernel.TLSCert) M {
 		}
 	}
 
+	// 只用內嵌 PEM；不設路徑欄位，避免去 open 不存在的檔。
 	t["certificate"] = []string{string(tc.CertPEM)}
 	t["key"] = []string{string(tc.KeyPEM)}
 
 	return t
+}
+
+// dropUnusableInboundCertificatePaths 拿掉不存在或佔位用的憑證路徑。
+// 官方 #10：certificate_path=self-signed 時檔案不存在，核啟動直接失敗。
+// 只清路徑；Reality／ECH 等非憑證 TLS 必須留下。沒有可用 PEM／路徑、
+// 也沒有 Reality，且本來靠路徑時，才摘掉 inbound tls（nginx 已終止 TLS）。
+func dropUnusableInboundCertificatePaths(inbound M) {
+	if inbound == nil {
+		return
+	}
+	tlsObj := inboundTLSMap(inbound["tls"])
+	if tlsObj == nil {
+		return
+	}
+	hadCertPath := tlsObj["certificate_path"] != nil || tlsObj["key_path"] != nil
+	if !inboundCertFileUsable(tlsObj["certificate_path"]) {
+		delete(tlsObj, "certificate_path")
+	}
+	if !inboundCertFileUsable(tlsObj["key_path"]) {
+		delete(tlsObj, "key_path")
+	}
+	if inboundHasInlinePEM(tlsObj) || inboundHasPathPair(tlsObj) || inboundHasReality(tlsObj) {
+		inbound["tls"] = tlsObj
+		return
+	}
+	if _, ok := tlsObj["ech"]; ok {
+		inbound["tls"] = tlsObj
+		return
+	}
+	// 本來沒寫路徑（例如 Reality 只有 enabled／reality）不能整段砍 tls。
+	if !hadCertPath {
+		inbound["tls"] = tlsObj
+		return
+	}
+	delete(inbound, "tls")
+}
+
+func inboundHasReality(tlsObj M) bool {
+	return tlsObj != nil && tlsObj["reality"] != nil
+}
+
+func inboundTLSMap(v any) M {
+	tls, ok := v.(M)
+	if !ok {
+		return nil
+	}
+	return tls
+}
+
+func inboundHasInlinePEM(tlsObj M) bool {
+	return inboundPEMPresent(tlsObj["certificate"]) && inboundPEMPresent(tlsObj["key"])
+}
+
+func inboundPEMPresent(v any) bool {
+	switch x := v.(type) {
+	case string:
+		return strings.TrimSpace(x) != ""
+	case []string:
+		for _, item := range x {
+			if strings.TrimSpace(item) != "" {
+				return true
+			}
+		}
+	case []any:
+		for _, item := range x {
+			s, ok := item.(string)
+			if ok && strings.TrimSpace(s) != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func inboundHasPathPair(tlsObj M) bool {
+	_, hasCert := tlsObj["certificate_path"]
+	_, hasKey := tlsObj["key_path"]
+	return hasCert && hasKey
+}
+
+func inboundCertFileUsable(v any) bool {
+	path, ok := v.(string)
+	if !ok {
+		return false
+	}
+	path = strings.TrimSpace(path)
+	if path == "" || strings.EqualFold(path, "self-signed") {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }
 
 func buildRealityConfig(nc *model.NodeSpec) M {
