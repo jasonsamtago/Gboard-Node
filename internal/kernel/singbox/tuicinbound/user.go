@@ -4,6 +4,7 @@ import (
 	"github.com/gofrs/uuid/v5"
 	"github.com/jasonsamtago/Gboard-Node/internal/kernel/singbox/hotuser"
 	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-quic/tuic"
 	"github.com/sagernet/sing/common/exceptions"
 )
 
@@ -32,8 +33,38 @@ func (h *Inbound) UpdateUsers(users []option.TUICUser) error {
 	if err != nil {
 		return err
 	}
-	h.server.UpdateUsers(ids, userUUIDList, userPasswordList)
+	if err := h.publishUsers(ids, userUUIDList, userPasswordList); err != nil {
+		return err
+	}
 	h.userCount = len(users)
 	hotuser.LogUpdate("tuic", from, len(users))
+	return nil
+}
+
+func (h *Inbound) publishUsers(ids []string, uuids [][16]byte, passwords []string) error {
+	if h.packetConn == nil {
+		h.server.UpdateUsers(ids, uuids, passwords)
+		return nil
+	}
+	return h.replaceService(ids, uuids, passwords)
+}
+
+// replaceService 先關舊 QUIC／auth 讀 map，再把名單寫進新 Service。
+// 不准跟進線 handshake 對打同一張 userMap；UDP 埠由 quicbind.Relay 留著。
+func (h *Inbound) replaceService(ids []string, uuids [][16]byte, passwords []string) error {
+	svc, err := tuic.NewService[string](h.serverOpts)
+	if err != nil {
+		return err
+	}
+	svc.UpdateUsers(ids, uuids, passwords)
+	next := h.relay.Session()
+	if old := h.server; old != nil {
+		_ = old.Close()
+	}
+	if err := svc.Start(next); err != nil {
+		return err
+	}
+	h.packetConn = next
+	h.server = svc
 	return nil
 }

@@ -24,6 +24,7 @@ import (
 	"github.com/jasonsamtago/Gboard-Node/internal/kernel/singbox/hy2inbound"
 	"github.com/jasonsamtago/Gboard-Node/internal/kernel/singbox/tuicinbound"
 	"github.com/jasonsamtago/Gboard-Node/internal/kernel/singbox/vlessinbound"
+	"github.com/jasonsamtago/Gboard-Node/internal/kernel/singbox/vmessinbound"
 	"github.com/jasonsamtago/Gboard-Node/internal/model"
 	"github.com/jasonsamtago/Gboard-Node/internal/nlog"
 
@@ -546,6 +547,7 @@ func (s *SingBox) AddUsers(users []model.UserSpec) (int, error) {
 	toAdd, toRemove := kernel.UserDiff(s.users, merged)
 	// Bookkeeping may already have the new UUID while the inbound still
 	// holds the old one. Always hot-write the inbound for the requested set.
+	s.closeRemovedUsersLocked(toRemove)
 	if err := s.reloadInboundsLocked(merged); err != nil {
 		return 0, err
 	}
@@ -587,6 +589,7 @@ func (s *SingBox) RemoveUsers(users []model.UserSpec) (int, error) {
 		return 0, nil
 	}
 
+	s.closeRemovedUsersLocked(users)
 	if err := s.reloadInboundsLocked(kept); err != nil {
 		return 0, err
 	}
@@ -618,6 +621,7 @@ func (s *SingBox) UpdateUsers(users []model.UserSpec) (added, removed int, err e
 		return 0, 0, nil
 	}
 
+	s.closeRemovedUsersLocked(toRemove)
 	if err = s.reloadInboundsLocked(users); err != nil {
 		return 0, 0, err
 	}
@@ -806,8 +810,8 @@ func buildUserMap(users []model.UserSpec) map[string]int {
 	return m
 }
 
-// overrideHy2TUICInbounds swaps cedar2025 Hy2/TUIC/VLESS constructors for the
-// Gboard-Node copies. VLESS 覆寫是為了 ws Host 必須在 listener 核對。
+// overrideHy2TUICInbounds swaps cedar2025 Hy2/TUIC/VLESS/VMess constructors.
+// VLESS／VMess 覆寫：熱更新用新 Service 原子替換，不准跟 NewConnection 搶 user map。
 // Must run after include.Context.
 func overrideHy2TUICInbounds(ctx context.Context) {
 	reg, ok := service.FromContext[adapter.InboundRegistry](ctx).(*singInbound.Registry)
@@ -818,6 +822,7 @@ func overrideHy2TUICInbounds(ctx context.Context) {
 	hy2inbound.RegisterInbound(reg)
 	tuicinbound.RegisterInbound(reg)
 	vlessinbound.RegisterInbound(reg)
+	vmessinbound.RegisterInbound(reg)
 }
 
 func hy2HopRange(nc *model.NodeSpec) hy2inbound.Range {

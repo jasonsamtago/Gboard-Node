@@ -52,6 +52,7 @@ func limitDispatcherFactory(ctx context.Context, config interface{}) (interface{
 		inner:      orig,
 		innerDisp:  inner,
 		limitedIPs: make(map[string]map[string]int),
+		conns:      make(map[uint64]*trackedConn),
 	}
 	globalLimitDispatcher.Store(ld)
 	nlog.Core().Debug("xray: limit dispatcher installed")
@@ -81,6 +82,18 @@ type LimitDispatcher struct {
 	unlimitedIPs sync.Map // email → *ipCounter
 
 	connCount atomic.Int64 // total active connections tracked by dispatcher
+
+	// live: per-link kick targets. Reader is stored, never replaced on the
+	// Link (mux/XUDP needs the original *pipe.Reader).
+	conns   map[uint64]*trackedConn
+	connSeq uint64
+}
+
+type trackedConn struct {
+	email   string
+	writer  *closeTrackingWriter
+	reader  buf.Reader
+	inbound net.Conn
 }
 
 // ipCounter tracks IPs for unlimited users without any lock.
@@ -117,7 +130,7 @@ func (d *LimitDispatcher) Dispatch(ctx context.Context, dest net.Destination) (*
 	}
 
 	if email != "" {
-		d.trackLink(link, email, sourceIP, isTCP)
+		d.trackLink(link, email, sourceIP, isTCP, inboundConnFromCtx(ctx))
 	}
 	return link, nil
 }
@@ -129,7 +142,7 @@ func (d *LimitDispatcher) DispatchLink(ctx context.Context, dest net.Destination
 	}
 
 	if email != "" {
-		d.trackLink(link, email, sourceIP, isTCP)
+		d.trackLink(link, email, sourceIP, isTCP, inboundConnFromCtx(ctx))
 	}
 	return d.innerDisp.DispatchLink(ctx, dest, link)
 }
@@ -153,6 +166,14 @@ func (d *LimitDispatcher) identifyAndCheck(ctx context.Context, dest net.Destina
 	return email, sourceIP, isTCP, nil
 }
 
+func inboundConnFromCtx(ctx context.Context) net.Conn {
+	si := session.InboundFromContext(ctx)
+	if si == nil {
+		return nil
+	}
+	return si.Conn
+}
+
 // trackLink records connection lifecycle so device-limit state is released
 // when the link closes. Reader is left intact (mux/XUDP needs *pipe.Reader).
 //
@@ -160,17 +181,34 @@ func (d *LimitDispatcher) identifyAndCheck(ctx context.Context, dest net.Destina
 // *dispatcher.SizeStatWriter, wrap inside it: xray vision splice
 // (CopyRawConnIfExist) only increments the outermost SizeStatWriter, so
 // hiding that type drops user stats by an order of magnitude.
-func (d *LimitDispatcher) trackLink(link *transport.Link, email, sourceIP string, isTCP bool) {
+func (d *LimitDispatcher) trackLink(link *transport.Link, email, sourceIP string, isTCP bool, inbound net.Conn) {
 	d.connCount.Add(1)
 
-	onClose := func() {
+	tracker := &closeTrackingWriter{}
+	d.mu.Lock()
+	d.connSeq++
+	id := d.connSeq
+	if d.conns == nil {
+		d.conns = make(map[uint64]*trackedConn)
+	}
+	d.conns[id] = &trackedConn{
+		email:   email,
+		writer:  tracker,
+		reader:  link.Reader,
+		inbound: inbound,
+	}
+	d.mu.Unlock()
+
+	tracker.onClose = func() {
 		if isTCP {
 			d.delConn(email, sourceIP)
 		}
 		d.connCount.Add(-1)
+		d.mu.Lock()
+		delete(d.conns, id)
+		d.mu.Unlock()
 	}
 
-	tracker := &closeTrackingWriter{onClose: onClose}
 	if sw, ok := link.Writer.(*xrayDispatcher.SizeStatWriter); ok {
 		tracker.Writer = sw.Writer
 		sw.Writer = tracker
@@ -178,6 +216,35 @@ func (d *LimitDispatcher) trackLink(link *transport.Link, email, sourceIP string
 	}
 	tracker.Writer = link.Writer
 	link.Writer = tracker
+}
+
+// CloseByEmail force-closes live links for a panel user email (user@<id>).
+// Interrupts the tracked writer and original reader, and closes the inbound
+// net.Conn when xray exposed it — without replacing link.Reader.
+func (d *LimitDispatcher) CloseByEmail(email string) {
+	if email == "" || d == nil {
+		return
+	}
+	d.mu.Lock()
+	var targets []*trackedConn
+	for id, c := range d.conns {
+		if c != nil && c.email == email {
+			targets = append(targets, c)
+			delete(d.conns, id)
+		}
+	}
+	d.mu.Unlock()
+	for _, c := range targets {
+		if c.writer != nil {
+			c.writer.Interrupt()
+		}
+		if c.reader != nil {
+			common.Interrupt(c.reader)
+		}
+		if c.inbound != nil {
+			_ = c.inbound.Close()
+		}
+	}
 }
 
 // ─── features.Feature (delegated) ───────────────────────────────────────────
@@ -211,6 +278,7 @@ func (d *LimitDispatcher) UpdateLimits(emailToUID map[string]int, deviceLimits, 
 func (d *LimitDispatcher) ResetConns() {
 	d.mu.Lock()
 	d.limitedIPs = make(map[string]map[string]int)
+	d.conns = make(map[uint64]*trackedConn)
 	d.mu.Unlock()
 
 	// Clear unlimited IPs

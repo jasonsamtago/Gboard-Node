@@ -195,7 +195,7 @@ func TestLimitDispatcher_TrackLinkPreservesReader(t *testing.T) {
 	origWriter := &closeTrackingWriter{Writer: buf.Discard, onClose: func() {}}
 	link := &transport.Link{Reader: origReader, Writer: origWriter}
 
-	ld.trackLink(link, email, "1.1.1.1", true)
+	ld.trackLink(link, email, "1.1.1.1", true, nil)
 
 	if link.Reader != origReader {
 		t.Fatal("trackLink must not replace link.Reader")
@@ -217,7 +217,7 @@ func TestLimitDispatcher_TrackLinkMustNotHideSizeStatWriter(t *testing.T) {
 	statWriter := &xrayDispatcher.SizeStatWriter{Counter: counter, Writer: buf.Discard}
 	link := &transport.Link{Reader: nopReader{}, Writer: statWriter}
 
-	ld.trackLink(link, email, "1.1.1.1", true)
+	ld.trackLink(link, email, "1.1.1.1", true, nil)
 
 	outer, ok := link.Writer.(*xrayDispatcher.SizeStatWriter)
 	if !ok {
@@ -252,7 +252,7 @@ func TestLimitDispatcher_CloseTrackingWriterReleasesConn(t *testing.T) {
 	}
 
 	link := &transport.Link{Reader: nopReader{}, Writer: buf.Discard}
-	ld.trackLink(link, email, "1.1.1.1", true)
+	ld.trackLink(link, email, "1.1.1.1", true, nil)
 
 	if got := ld.connCount.Load(); got != 1 {
 		t.Fatalf("expected connCount=1 after tracking, got %d", got)

@@ -266,9 +266,42 @@ func (x *Xray) CloseConnection(_ context.Context, _ string) error {
 	return nil
 }
 
-func (x *Xray) CloseUserConnections(_ context.Context, _ string) error {
-	// No-op: handled by RemoveUsers at the xray core level.
+func (x *Xray) CloseUserConnections(_ context.Context, uuid string) error {
+	if uuid == "" {
+		return nil
+	}
+	x.mu.Lock()
+	ld := x.limitDispatcher
+	users := x.users
+	x.mu.Unlock()
+	if ld == nil {
+		return nil
+	}
+	for _, u := range users {
+		if u.UUID == uuid {
+			ld.CloseByEmail(userEmail(u.ID))
+			return nil
+		}
+	}
 	return nil
+}
+
+// closeUsersByEmail kicks live dispatcher links for the given users.
+// Call without holding x.mu. Email is derived from panel user ID, so this
+// must run before or independently of overwriting x.users.
+func (x *Xray) closeUsersByEmail(users []model.UserSpec) {
+	if len(users) == 0 {
+		return
+	}
+	x.mu.Lock()
+	ld := x.limitDispatcher
+	x.mu.Unlock()
+	if ld == nil {
+		return
+	}
+	for _, u := range users {
+		ld.CloseByEmail(userEmail(u.ID))
+	}
 }
 
 // SetSpeedLimitFunc wires xray's patched bandwidth feature to the shared
@@ -430,6 +463,7 @@ func (x *Xray) RemoveUsers(users []model.UserSpec) (int, error) {
 		}
 		actualRemoved++
 	}
+	x.closeUsersByEmail(users)
 
 	x.mu.Lock()
 	x.users = kept
@@ -491,6 +525,7 @@ func (x *Xray) UpdateUsers(users []model.UserSpec) (added, removed int, err erro
 		}
 		removed++
 	}
+	x.closeUsersByEmail(toRemove)
 	for _, u := range toAdd {
 		mu, buildErr := toMemoryUser(proto, nc, u)
 		if buildErr != nil {
