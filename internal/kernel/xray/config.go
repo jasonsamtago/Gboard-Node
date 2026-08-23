@@ -555,7 +555,16 @@ func applyStreamSettings(base M, nc *model.NodeSpec, tc kernel.TLSCert) {
 		ss["xhttpSettings"] = xhttpSettings
 
 	case "tcp":
-		if tcpSettings := buildTCPHTTPSettings(nc); tcpSettings != nil {
+		tcpSettings := buildTCPHTTPSettings(nc)
+		if nc.GetProxyProtocol() {
+			if tcpSettings == nil {
+				tcpSettings = M{}
+			}
+			// v2bx／xray-core：acceptProxyProtocol 寫在 tcpSettings（listen 層）。
+			// tcp hub 會把它 OR 進 sockopt，再由 system listener 包 PROXY。
+			tcpSettings["acceptProxyProtocol"] = true
+		}
+		if tcpSettings != nil {
 			ss["tcpSettings"] = tcpSettings
 		}
 	}

@@ -67,6 +67,9 @@ type SingBox struct {
 	// trackerRegistered prevents duplicate AppendTracker calls on the same
 	// Router instance during Reload. Reset to false on full restart.
 	trackerRegistered bool
+
+	// ppProxy accepts PROXY protocol in front of sing-box (1.6 removed native PP).
+	ppProxy *proxyProtocolProxy
 }
 
 func New(cfg config.KernelConfig) *SingBox {
@@ -101,10 +104,20 @@ func (s *SingBox) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls 
 
 	s.ensureGeoData(nodeConfig)
 
-	cfgMap := buildConfig(s.cfg, nodeConfig, users, tls)
+	closeProxyProtocolProxy(s.ppProxy)
+	s.ppProxy = nil
+
+	listenSpec, proxy, err := maybeStartProxyProtocolProxy(nodeConfig)
+	if err != nil {
+		return err
+	}
+
+	cfgMap := buildConfig(s.cfg, listenSpec, users, tls)
 	stripHy2HopListenFields(cfgMap)
+	stripDeprecatedProxyProtocol(cfgMap)
 	data, err := json.Marshal(cfgMap)
 	if err != nil {
+		closeProxyProtocolProxy(proxy)
 		return fmt.Errorf("marshal config: %w", err)
 	}
 
@@ -117,6 +130,7 @@ func (s *SingBox) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls 
 
 	opts, err := singJSON.UnmarshalExtendedContext[option.Options](ctx, data)
 	if err != nil {
+		closeProxyProtocolProxy(proxy)
 		cancel()
 		return fmt.Errorf("parse sing-box options: %w", err)
 	}
@@ -132,11 +146,13 @@ func (s *SingBox) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls 
 		Options: opts,
 	})
 	if err != nil {
+		closeProxyProtocolProxy(proxy)
 		cancel()
 		return fmt.Errorf("create sing-box instance: %w", err)
 	}
 
 	if err := instance.Start(); err != nil {
+		closeProxyProtocolProxy(proxy)
 		instance.Close()
 		cancel()
 		return fmt.Errorf("start sing-box: %w", err)
@@ -161,6 +177,7 @@ func (s *SingBox) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls 
 	}
 
 	s.trackerRegistered = false
+	s.ppProxy = proxy
 	s.registerTracker(ctx)
 
 	// Recycle old instance in background — drain then close.
@@ -223,8 +240,20 @@ func (s *SingBox) Reload(nodeConfig *model.NodeSpec, users []model.UserSpec, tls
 		return fmt.Errorf("not running")
 	}
 
-	cfgMap := buildConfig(s.cfg, nodeConfig, users, tls)
+	listenSpec := nodeConfig
+	switch {
+	case nodeConfig.GetProxyProtocol() && s.ppProxy == nil, !nodeConfig.GetProxyProtocol() && s.ppProxy != nil:
+		s.mu.Unlock()
+		err := s.Start(nodeConfig, users, tls)
+		s.mu.Lock()
+		return err
+	case s.ppProxy != nil:
+		listenSpec = innerNodeSpec(nodeConfig, s.ppProxy.internalPort)
+	}
+
+	cfgMap := buildConfig(s.cfg, listenSpec, users, tls)
 	stripHy2HopListenFields(cfgMap)
+	stripDeprecatedProxyProtocol(cfgMap)
 	data, err := json.Marshal(cfgMap)
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
@@ -362,6 +391,9 @@ func (s *SingBox) Stop() {
 }
 
 func (s *SingBox) stop() {
+	closeProxyProtocolProxy(s.ppProxy)
+	s.ppProxy = nil
+
 	if s.box == nil {
 		return
 	}
@@ -589,8 +621,13 @@ func mergeUsersByID(base, overlay []model.UserSpec) []model.UserSpec {
 // reloadInboundsLocked hot-swaps inbound users using UpdatableInbound.
 // Must be called with s.mu held.
 func (s *SingBox) reloadInboundsLocked(users []model.UserSpec) error {
-	cfgMap := buildConfig(s.cfg, s.nodeConfig, users, s.tls)
+	listenSpec := s.nodeConfig
+	if s.ppProxy != nil {
+		listenSpec = innerNodeSpec(s.nodeConfig, s.ppProxy.internalPort)
+	}
+	cfgMap := buildConfig(s.cfg, listenSpec, users, s.tls)
 	stripHy2HopListenFields(cfgMap)
+	stripDeprecatedProxyProtocol(cfgMap)
 	data, err := json.Marshal(cfgMap)
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
