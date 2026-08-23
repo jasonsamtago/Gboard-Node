@@ -970,7 +970,11 @@ func buildHTTP(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLS
 }
 
 func applyTransport(base M, nc *model.NodeSpec) {
-	if nc.Network == "" || nc.Network == "tcp" {
+	if nc.Network == "" {
+		return
+	}
+	if nc.Network == "tcp" {
+		applyTCPHTTPTransport(base, nc)
 		return
 	}
 
@@ -1021,6 +1025,94 @@ func applyTransport(base M, nc *model.NodeSpec) {
 	}
 
 	base["transport"] = transport
+}
+
+// applyTCPHTTPTransport writes the panel tcp+http disguise (header.type=http +
+// request.headers.Host) as sing-box V2Ray HTTP transport. Pure tcp must not
+// grow a transport object. Host stays on the inbound.
+func applyTCPHTTPTransport(base M, nc *model.NodeSpec) {
+	if nc == nil || nc.NetworkSettings == nil {
+		return
+	}
+	header := asSettingsMap(nc.NetworkSettings["header"])
+	if header == nil {
+		return
+	}
+	typ, _ := header["type"].(string)
+	if !strings.EqualFold(typ, "http") {
+		return
+	}
+
+	transport := M{"type": "http"}
+	if request := asSettingsMap(header["request"]); request != nil {
+		if path := firstSettingsString(request["path"]); path != "" {
+			transport["path"] = path
+		}
+		if reqHeaders := asSettingsMap(request["headers"]); reqHeaders != nil {
+			if hosts := settingsStringList(reqHeaders["Host"]); len(hosts) > 0 {
+				transport["host"] = hosts
+			}
+		}
+	}
+	if transport["host"] == nil {
+		if hdrs := asSettingsMap(header["headers"]); hdrs != nil {
+			if hosts := settingsStringList(hdrs["Host"]); len(hosts) > 0 {
+				transport["host"] = hosts
+			}
+		}
+	}
+	if transport["path"] == nil && transport["host"] == nil {
+		return
+	}
+	if transport["path"] == nil {
+		transport["path"] = "/"
+	}
+	base["transport"] = transport
+}
+
+func asSettingsMap(v any) M {
+	if m, ok := v.(map[string]any); ok {
+		return m
+	}
+	return nil
+}
+
+func firstSettingsString(v any) string {
+	list := settingsStringList(v)
+	if len(list) == 0 {
+		return ""
+	}
+	return list[0]
+}
+
+func settingsStringList(v any) []string {
+	switch x := v.(type) {
+	case string:
+		if strings.TrimSpace(x) == "" {
+			return nil
+		}
+		return []string{x}
+	case []string:
+		out := make([]string, 0, len(x))
+		for _, s := range x {
+			if s = strings.TrimSpace(s); s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	case []any:
+		out := make([]string, 0, len(x))
+		for _, item := range x {
+			s := strings.TrimSpace(fmt.Sprint(item))
+			if s == "" || s == "<nil>" {
+				continue
+			}
+			out = append(out, s)
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 // buildTLSConfig returns sing-box inbound TLS options when certificate material

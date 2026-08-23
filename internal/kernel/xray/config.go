@@ -555,7 +555,9 @@ func applyStreamSettings(base M, nc *model.NodeSpec, tc kernel.TLSCert) {
 		ss["xhttpSettings"] = xhttpSettings
 
 	case "tcp":
-		// default, no extra settings
+		if tcpSettings := buildTCPHTTPSettings(nc); tcpSettings != nil {
+			ss["tcpSettings"] = tcpSettings
+		}
 	}
 
 	// TLS
@@ -606,6 +608,23 @@ func applyStreamSettings(base M, nc *model.NodeSpec, tc kernel.TLSCert) {
 	}
 
 	base["streamSettings"] = ss
+}
+
+// buildTCPHTTPSettings writes the panel tcp+http disguise (header.type=http +
+// request.headers.Host) into xray tcpSettings. Host stays on streamSettings.
+func buildTCPHTTPSettings(nc *model.NodeSpec) M {
+	if nc == nil || nc.NetworkSettings == nil {
+		return nil
+	}
+	header, ok := nc.NetworkSettings["header"].(map[string]any)
+	if !ok || header == nil {
+		return nil
+	}
+	typ, _ := header["type"].(string)
+	if !strings.EqualFold(typ, "http") {
+		return nil
+	}
+	return M{"header": header}
 }
 
 func buildRealitySettings(nc *model.NodeSpec) M {
