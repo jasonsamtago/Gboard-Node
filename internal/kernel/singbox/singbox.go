@@ -151,6 +151,12 @@ func (s *SingBox) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls 
 		return fmt.Errorf("create sing-box instance: %w", err)
 	}
 
+	// Kernel.Start 合約：已在跑時先放掉舊 listener，同埠／改協議才能再 bind。
+	// 必須同步關舊 inbound，不能等 recycleOldBox，否則新核會 address already in use。
+	if oldCtx != nil {
+		releaseInboundListeners(oldCtx)
+	}
+
 	if err := instance.Start(); err != nil {
 		closeProxyProtocolProxy(proxy)
 		instance.Close()
@@ -180,7 +186,7 @@ func (s *SingBox) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls 
 	s.ppProxy = proxy
 	s.registerTracker(ctx)
 
-	// Recycle old instance in background — drain then close.
+	// Recycle old instance in background — listeners already released above.
 	if oldBox != nil {
 		go recycleOldBox(oldBox, oldCancel, oldCtx, oldTracker)
 	}
@@ -204,11 +210,18 @@ func (s *SingBox) ensureGeoData(nc *model.NodeSpec) {
 // recycleOldBox gracefully shuts down a previous sing-box instance in the
 // background. It closes listen sockets first, waits for connections to drain,
 // then hard-closes. This avoids blocking the new instance's startup.
-func recycleOldBox(oldBox *box.Box, oldCancel context.CancelFunc, oldCtx context.Context, oldTracker *ConnTracker) {
-	// Step 1: close listen sockets so no new connections arrive on old ports.
-	if im := service.FromContext[adapter.InboundManager](oldCtx); im != nil {
+func releaseInboundListeners(ctx context.Context) {
+	if ctx == nil {
+		return
+	}
+	if im := service.FromContext[adapter.InboundManager](ctx); im != nil {
 		_ = im.Close()
 	}
+}
+
+func recycleOldBox(oldBox *box.Box, oldCancel context.CancelFunc, oldCtx context.Context, oldTracker *ConnTracker) {
+	// Step 1: close listen sockets (no-op if Start already released them).
+	releaseInboundListeners(oldCtx)
 
 	// Step 2: drain in-flight connections (best-effort).
 	if oldTracker != nil {
@@ -286,6 +299,16 @@ func (s *SingBox) Reload(nodeConfig *model.NodeSpec, users []model.UserSpec, tls
 	// Configuration hash check for inbound reconstruction
 	tlsChanged := !bytes.Equal(s.tls.CertPEM, tls.CertPEM) || !bytes.Equal(s.tls.KeyPEM, tls.KeyPEM)
 	configChanged := tlsChanged || s.nodeConfig == nil || kernel.ComputeHash(nodeConfig, users) != kernel.ComputeHash(s.nodeConfig, s.users)
+
+	wanted := make(map[string]struct{}, len(opts.Inbounds))
+	for _, inb := range opts.Inbounds {
+		wanted[inb.Tag] = struct{}{}
+	}
+	// 協議 tag 會變（vmess-in → vless-in）。只 Remove 新 tag 會留下舊 inbound
+	// 占著舊埠，同 node_id 熱更新就 address already in use。
+	if configChanged {
+		removeStaleInbounds(im, wanted)
+	}
 
 	for _, inb := range opts.Inbounds {
 		tag := inb.Tag
@@ -365,6 +388,29 @@ func (s *SingBox) Reload(nodeConfig *model.NodeSpec, users []model.UserSpec, tls
 	s.nodeConfig = nodeConfig
 	s.tls = tls
 	return nil
+}
+
+func removeStaleInbounds(im adapter.InboundManager, wanted map[string]struct{}) {
+	if im == nil {
+		return
+	}
+	var stale []string
+	for _, existing := range im.Inbounds() {
+		if existing == nil {
+			continue
+		}
+		tag := existing.Tag()
+		if _, keep := wanted[tag]; !keep {
+			stale = append(stale, tag)
+		}
+	}
+	for _, tag := range stale {
+		if err := im.Remove(tag); err != nil {
+			nlog.Core().Debug("sing-box remove stale inbound", "tag", tag, "error", err)
+			continue
+		}
+		nlog.Core().Debug("sing-box released stale inbound", "tag", tag)
+	}
 }
 
 // registerTracker wires the ConnTracker to the current Router exactly once.

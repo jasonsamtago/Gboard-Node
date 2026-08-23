@@ -399,8 +399,9 @@ func (m *Manager) startContent() error {
 
 func (m *Manager) startACME(ctx context.Context, dnsSolver *certmagic.DNS01Solver) error {
 	// Idempotent for unchanged config: Reconfigure already tore down stale ACME state.
+	// Same-node reload still must put PEM back into memory if it was dropped.
 	if m.acmeStarted {
-		return nil
+		return m.ensureACMEPEM(ctx)
 	}
 
 	if m.cfg.Domain == "" {
@@ -503,6 +504,28 @@ func (m *Manager) startACME(ctx context.Context, dnsSolver *certmagic.DNS01Solve
 	m.acmeFingerprint = acmeFingerprint(m.cfg)
 	m.acmeStarted = true
 	return nil
+}
+
+// ensureACMEPEM reloads in-memory PEM after a same-node restart / Reconfigure
+// when ACME already obtained the cert (ObtainCertSync is a no-op) but mat was
+// cleared. This is official #27 — not #69 multi-node obtain-once.
+func (m *Manager) ensureACMEPEM(ctx context.Context) error {
+	if m.HasCert() {
+		return nil
+	}
+	if m.magic != nil && len(m.magic.Issuers) > 0 && m.cfg.Domain != "" {
+		storage := &certmagic.FileStorage{Path: m.cfg.CertDir}
+		if err := m.loadPEMFromStorage(ctx, storage, m.magic.Issuers[0].IssuerKey(), m.cfg.Domain); err == nil {
+			return nil
+		} else if !m.loadPersistedPEM() {
+			return fmt.Errorf("ACME obtained certificate but PEM was not loaded; check storage: %w", err)
+		}
+		return nil
+	}
+	if m.loadPersistedPEM() {
+		return nil
+	}
+	return fmt.Errorf("ACME obtained certificate but PEM was not loaded; check storage")
 }
 
 func validateKeyPair(certPEM, keyPEM []byte) error {
