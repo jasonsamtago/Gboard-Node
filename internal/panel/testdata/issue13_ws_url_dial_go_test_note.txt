@@ -1,0 +1,19 @@
+# 官方 cedar2025/Xboard-Node #13 — handshake ws_url 必須原樣 dial host／path／port
+# 指令：go test ./internal/panel/ ./internal/controlplane/ ./internal/machine/ -count=1 -timeout 90s -run 'HandshakeURL|ParseWSURL_MustNot|WrongPathMustSurface|TryStartWS_Handshake'
+# 基底：dev tip f9f6163（已含 #61 parseWSURL）
+# 日期：2026-08-23
+#
+# 以碼為準（不是修補）：
+# - panel.WSClient.connect 用 parseWSURL(handshake ws_url) 再 Dialer.DialContext
+# - parseWSURL 只改 scheme（http→ws、https→wss），host／path／port 原樣留下
+# - controlplane Initial／Discover 與 machine tryStartWS 都把 hs.WebSocket.WSURL
+#   原樣丟進 NewWSClient，沒有改寫 :8076
+#
+# 因此本輪測在當前 tip 上是綠（見 issue13_ws_url_dial_go_test.txt）。
+# 官方現象 `dial: unexpected EOF`／`ws://127.0.0.1:8076` 來自舊面板
+# handshake 下發的 URL（無 /ws），不是 node 把 path 丟掉或硬連 :8076。
+#
+# fixture 設計：只在 handshake path（/ws、/custom）做 upgrade；打到 / 或
+# :8076 decoy 會空關，錯誤可對上 unexpected EOF／bad handshake。
+# 若之後實作改回硬連 :8076 或丟 path，這些測必須紅。
+# 不准關 WS／退 REST；不准把路徑改回 :8076；Trojan SNI 不在本票。
