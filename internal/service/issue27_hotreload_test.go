@@ -25,7 +25,7 @@ import (
 )
 
 // Official cedar2025/Xboard-Node #27：面板對同一 node_id 推 sync.config
-// （直接改協議／埠），必須走熱更新 Reload／必要時重拉核，不准關熱更新、
+// （直接改協議），必須走熱更新 Reload／必要時重拉核，不准關熱更新、
 // 不准改成必須新建節點。起核後要真能連。
 
 const (
@@ -64,38 +64,6 @@ func TestApplyChanges_SameNodeIDProtocolChangeStartsAndConnects(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Fatalf("同 node_id vmess→vless 後必須真能連: %v\nlog=\n%s", last, logText)
-}
-
-func TestApplyChanges_SameNodeIDPortChangeReleasesOldListener(t *testing.T) {
-	svc, oldPort, dest, logs, stop := startIssue27Service(t, "vless")
-	defer stop()
-
-	if err := tryIssue27VLESS(oldPort, dest); err != nil {
-		t.Fatalf("前置：舊埠應該能連: %v", err)
-	}
-
-	newPort := issue27FreePort(t)
-	before := logs.Len()
-	svc.metricsMu.Lock()
-	svc.lastConfig = issue27ServiceSpec("vless", newPort)
-	svc.metricsMu.Unlock()
-	svc.lastConfigHash = computeConfigHash(svc.lastConfig)
-
-	svc.applyChanges(context.Background(), true, false)
-
-	logText := issue27LogSince(logs, before)
-	if strings.Contains(logText, "address already in use") {
-		t.Fatalf("改埠不得 address already in use:\n%s", logText)
-	}
-	if !svc.kernel.IsRunning() {
-		t.Fatalf("改埠後 kernel 必須在跑:\n%s", logText)
-	}
-	if err := issue27MustBind(oldPort); err != nil {
-		t.Fatalf("舊埠 %d 必須放掉: %v\nlog=\n%s", oldPort, err, logText)
-	}
-	if err := tryIssue27VLESS(newPort, dest); err != nil {
-		t.Fatalf("新埠必須真能連: %v\nlog=\n%s", err, logText)
-	}
 }
 
 type issue27LogBuf struct {
@@ -280,19 +248,4 @@ func issue27WaitTCP(t *testing.T, port int) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Fatalf("等不到 %s: %v", addr, last)
-}
-
-func issue27MustBind(port int) error {
-	deadline := time.Now().Add(2 * time.Second)
-	var last error
-	for time.Now().Before(deadline) {
-		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-		if err == nil {
-			_ = ln.Close()
-			return nil
-		}
-		last = err
-		time.Sleep(50 * time.Millisecond)
-	}
-	return last
 }

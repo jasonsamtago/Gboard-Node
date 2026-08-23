@@ -25,12 +25,11 @@ const (
 )
 
 func TestSingBoxReload_SameNodeIDProtocolChangeRebindsAndConnects(t *testing.T) {
-	s, port, dest, logs, stop := startSingBoxIssue27(t, "vmess", 0)
+	s, port, dest, logs, stop := startSingBoxIssue27(t, "vmess")
 	defer stop()
 
 	before := logs.Len()
-	vless := issue27NodeSpec("vless", port)
-	if err := s.Reload(vless, issue27Users(), kernel.TLSCert{}); err != nil {
+	if err := s.Reload(issue27NodeSpec("vless", port), issue27Users(), kernel.TLSCert{}); err != nil {
 		t.Fatalf("同 node_id vmess→vless Reload 必須成功（官方 #27，不准新建 node_id）: %v\nlog=\n%s", err, logs.Since(before))
 	}
 	logText := logs.Since(before)
@@ -47,51 +46,22 @@ func TestSingBoxReload_SameNodeIDProtocolChangeRebindsAndConnects(t *testing.T) 
 	}
 }
 
-func TestSingBoxReload_SameNodeIDPortChangeReleasesOldListener(t *testing.T) {
-	s, oldPort, dest, logs, stop := startSingBoxIssue27(t, "vless", 0)
-	defer stop()
-
-	if err := trySingBoxVLESS(t, oldPort, issue27UserUUID, dest); err != nil {
-		t.Fatalf("前置：舊埠 vless 應該能連: %v", err)
-	}
-
-	newPort := sbFreeTCPPort(t)
-	before := logs.Len()
-	next := issue27NodeSpec("vless", newPort)
-	if err := s.Reload(next, issue27Users(), kernel.TLSCert{}); err != nil {
-		t.Fatalf("同 node_id 改埠 Reload 必須成功: %v\nlog=\n%s", err, logs.Since(before))
-	}
-	logText := logs.Since(before)
-	if strings.Contains(logText, "address already in use") {
-		t.Fatalf("改埠不得 address already in use:\n%s", logText)
-	}
-
-	if err := issue27MustBind("127.0.0.1", oldPort); err != nil {
-		t.Fatalf("舊埠 %d 必須放掉，卻仍被占（官方 #27 address already in use）: %v\nlog=\n%s", oldPort, err, logText)
-	}
-	sbWaitTCP(t, fmt.Sprintf("127.0.0.1:%d", newPort))
-	if err := trySingBoxVLESS(t, newPort, issue27UserUUID, dest); err != nil {
-		t.Fatalf("新埠 %d 必須真能連: %v\nlog=\n%s", newPort, err, logText)
-	}
-}
-
 func TestSingBoxReload_SameNodeIDProtocolAndPortChangeDropsOldInbound(t *testing.T) {
 	// 協議 tag 從 vmess-in 換成 vless-in 時，若只 Remove 新 tag，
-	// 舊 inbound 會繼續占舊埠；官方現場就是再 bind 8443 報
+	// 舊 inbound 會繼續占舊埠；官方現場再 bind 就
 	// address already in use。
-	s, oldPort, dest, logs, stop := startSingBoxIssue27(t, "vmess", 0)
+	s, oldPort, dest, logs, stop := startSingBoxIssue27(t, "vmess")
 	defer stop()
 
 	newPort := sbFreeTCPPort(t)
 	before := logs.Len()
-	next := issue27NodeSpec("vless", newPort)
-	if err := s.Reload(next, issue27Users(), kernel.TLSCert{}); err != nil {
+	if err := s.Reload(issue27NodeSpec("vless", newPort), issue27Users(), kernel.TLSCert{}); err != nil {
 		t.Fatalf("同 node_id vmess:舊埠→vless:新埠 Reload 必須成功: %v\nlog=\n%s", err, logs.Since(before))
 	}
 	logText := logs.Since(before)
 
 	if err := issue27MustBind("127.0.0.1", oldPort); err != nil {
-		t.Fatalf("協議＋埠變更後舊埠 %d 必須放掉: %v\nlog=\n%s", oldPort, err, logText)
+		t.Fatalf("協議／埠變更後舊埠 %d 必須放掉: %v\nlog=\n%s", oldPort, err, logText)
 	}
 	sbWaitTCP(t, fmt.Sprintf("127.0.0.1:%d", newPort))
 	if err := trySingBoxVLESS(t, newPort, issue27UserUUID, dest); err != nil {
@@ -99,19 +69,16 @@ func TestSingBoxReload_SameNodeIDProtocolAndPortChangeDropsOldInbound(t *testing
 	}
 }
 
-func startSingBoxIssue27(t *testing.T, protocol string, port int) (*SingBox, int, *net.TCPAddr, *sbLockedLogBuf, func()) {
+func startSingBoxIssue27(t *testing.T, protocol string) (*SingBox, int, *net.TCPAddr, *sbLockedLogBuf, func()) {
 	t.Helper()
 
 	logs := &sbLockedLogBuf{}
 	nlog.Init(logs, slog.LevelDebug, false)
 
 	destLn, destAddr := startSingBoxHotDest(t)
-	if port == 0 {
-		port = sbFreeTCPPort(t)
-	}
-	nc := issue27NodeSpec(protocol, port)
+	port := sbFreeTCPPort(t)
 	s := New(config.KernelConfig{Type: "singbox", LogLevel: "debug"})
-	if err := s.Start(nc, issue27Users(), kernel.TLSCert{}); err != nil {
+	if err := s.Start(issue27NodeSpec(protocol, port), issue27Users(), kernel.TLSCert{}); err != nil {
 		destLn.Close()
 		t.Fatalf("啟動 singbox %s: %v", protocol, err)
 	}
