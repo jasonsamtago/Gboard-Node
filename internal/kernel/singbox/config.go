@@ -1165,7 +1165,8 @@ func buildTLSConfig(nc *model.NodeSpec, tc kernel.TLSCert) M {
 
 // dropUnusableInboundCertificatePaths 拿掉不存在或佔位用的憑證路徑。
 // 官方 #10：certificate_path=self-signed 時檔案不存在，核啟動直接失敗。
-// 沒有內嵌 PEM、也沒有剩餘可用路徑時，摘掉 inbound tls（nginx 已終止 TLS）。
+// 只清路徑；Reality／ECH 等非憑證 TLS 必須留下。沒有可用 PEM／路徑、
+// 也沒有 Reality，且本來靠路徑時，才摘掉 inbound tls（nginx 已終止 TLS）。
 func dropUnusableInboundCertificatePaths(inbound M) {
 	if inbound == nil {
 		return
@@ -1174,17 +1175,31 @@ func dropUnusableInboundCertificatePaths(inbound M) {
 	if tlsObj == nil {
 		return
 	}
+	hadCertPath := tlsObj["certificate_path"] != nil || tlsObj["key_path"] != nil
 	if !inboundCertFileUsable(tlsObj["certificate_path"]) {
 		delete(tlsObj, "certificate_path")
 	}
 	if !inboundCertFileUsable(tlsObj["key_path"]) {
 		delete(tlsObj, "key_path")
 	}
-	if inboundHasInlinePEM(tlsObj) || inboundHasPathPair(tlsObj) {
+	if inboundHasInlinePEM(tlsObj) || inboundHasPathPair(tlsObj) || inboundHasReality(tlsObj) {
+		inbound["tls"] = tlsObj
+		return
+	}
+	if _, ok := tlsObj["ech"]; ok {
+		inbound["tls"] = tlsObj
+		return
+	}
+	// 本來沒寫路徑（例如 Reality 只有 enabled／reality）不能整段砍 tls。
+	if !hadCertPath {
 		inbound["tls"] = tlsObj
 		return
 	}
 	delete(inbound, "tls")
+}
+
+func inboundHasReality(tlsObj M) bool {
+	return tlsObj != nil && tlsObj["reality"] != nil
 }
 
 func inboundTLSMap(v any) M {
