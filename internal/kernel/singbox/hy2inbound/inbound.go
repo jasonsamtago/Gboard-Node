@@ -1,5 +1,6 @@
 // Package hy2inbound replaces cedar2025/sing-box Hy2 inbound so UpdateUsers
 // stores uuid/id in the connection ctx instead of the array index.
+// 有 hop 區間時聽完整 UDP 區間，不能只聽起點。
 package hy2inbound
 
 import (
@@ -7,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/netip"
 	"net/url"
 	"time"
 
@@ -38,6 +40,8 @@ type Inbound struct {
 	tlsConfig tls.ServerConfig
 	service   *hysteria2.Service[string]
 	userCount int
+	hop       Range
+	mux       net.PacketConn
 }
 
 func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.Hysteria2InboundOptions) (adapter.Inbound, error) {
@@ -98,7 +102,8 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 			return nil, E.New("unknown masquerade type: ", options.Masquerade.Type)
 		}
 	}
-	inbound := &Inbound{
+	hop, _ := RangeFromContext(ctx)
+	in := &Inbound{
 		Adapter: inbound.NewAdapter(C.TypeHysteria2, tag),
 		router:  router,
 		logger:  logger,
@@ -108,6 +113,7 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 			Listen:  options.ListenOptions,
 		}),
 		tlsConfig: tlsConfig,
+		hop:       hop,
 	}
 	var udpTimeout time.Duration
 	if options.UDPTimeout != 0 {
@@ -125,7 +131,7 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 		TLSConfig:             tlsConfig,
 		IgnoreClientBandwidth: options.IgnoreClientBandwidth,
 		UDPTimeout:            udpTimeout,
-		Handler:               inbound,
+		Handler:               in,
 		MasqueradeHandler:     masqueradeHandler,
 	})
 	if err != nil {
@@ -133,9 +139,9 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 	}
 	userList, userPasswordList := hy2UserLists(options.Users)
 	service.UpdateUsers(userList, userPasswordList)
-	inbound.service = service
-	inbound.userCount = len(options.Users)
-	return inbound, nil
+	in.service = service
+	in.userCount = len(options.Users)
+	return in, nil
 }
 
 func (h *Inbound) NewConnectionEx(ctx context.Context, conn net.Conn, source M.Socksaddr, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
@@ -185,20 +191,39 @@ func (h *Inbound) Start(stage adapter.StartStage) error {
 		return nil
 	}
 	if h.tlsConfig != nil {
-		err := h.tlsConfig.Start()
-		if err != nil {
+		if err := h.tlsConfig.Start(); err != nil {
 			return err
 		}
 	}
-	packetConn, err := h.listener.ListenUDP()
+	packetConn, err := h.listenPacket()
 	if err != nil {
 		return err
 	}
 	return h.service.Start(packetConn)
 }
 
+func (h *Inbound) listenPacket() (net.PacketConn, error) {
+	if h.hop.IsHop() {
+		host := "::"
+		if opts := h.listener.ListenOptions(); opts.Listen != nil {
+			if addr := opts.Listen.Build(netip.IPv6Unspecified()); addr.IsValid() {
+				host = addr.String()
+			}
+		}
+		pc, err := ListenUDPRange(host, h.hop.Start, h.hop.End)
+		if err != nil {
+			return nil, err
+		}
+		h.mux = pc
+		h.logger.Info("hy2 udp hop listening ", h.hop.String())
+		return pc, nil
+	}
+	return h.listener.ListenUDP()
+}
+
 func (h *Inbound) Close() error {
 	return common.Close(
+		h.mux,
 		h.listener,
 		h.tlsConfig,
 		common.PtrOrNil(h.service),

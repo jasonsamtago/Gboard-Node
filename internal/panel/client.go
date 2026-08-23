@@ -14,9 +14,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/jasonsamtago/Gboard-Node/internal/config"
 	"github.com/jasonsamtago/Gboard-Node/internal/nlog"
-	"github.com/go-viper/mapstructure/v2"
 )
 
 var (
@@ -171,6 +171,9 @@ func (c *Client) Report(traffic map[int][2]int64, alive map[int][]string, online
 
 // decodeWeakRaw decodes an interface (from JSON map) into a struct using weak type conversion.
 func decodeWeakRaw(input map[string]interface{}, output interface{}) error {
+	if err := normalizeServerPort(input); err != nil {
+		return err
+	}
 	config := &mapstructure.DecoderConfig{
 		Metadata:         nil,
 		Result:           output,
