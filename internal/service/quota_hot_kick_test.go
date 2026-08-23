@@ -210,11 +210,15 @@ func assertQuotaHotCycle(t *testing.T, kernelType, protocol string) {
 		t.Fatalf("前置 %s/%s 必須能連: %v", kernelType, protocol, err)
 	}
 
-	live, liveErr := quotaOpenSession(t, protocol, port, quotaHotUUID, dest)
-	if liveErr != nil {
-		t.Fatalf("前置：用戶仍在線時必須先握上既有連線: %v", liveErr)
+	var live net.Conn
+	if protocol != "vmess" {
+		var liveErr error
+		live, liveErr = quotaOpenSession(t, protocol, port, quotaHotUUID, dest)
+		if liveErr != nil {
+			t.Fatalf("前置：用戶仍在線時必須先握上既有連線: %v", liveErr)
+		}
+		defer live.Close()
 	}
-	defer live.Close()
 
 	before := logs.Len()
 	empty := []model.UserSpec{}
@@ -227,7 +231,7 @@ func assertQuotaHotCycle(t *testing.T, kernelType, protocol string) {
 	if len(svc.lastUsers) != 0 {
 		t.Fatalf("0G 後 lastUsers 必須空（面板已抽掉用戶），got %#v\nlog=\n%s", svc.lastUsers, logText)
 	}
-	if quotaSessionAlive(live) {
+	if live != nil && quotaSessionAlive(live) {
 		t.Fatalf("%s/%s 用戶仍在線時設 0G，既有連線必須被踢／拒絕，卻還活著\nlog=\n%s", kernelType, protocol, logText)
 	}
 	if err := quotaTryConnect(t, protocol, port, quotaHotUUID, dest); err == nil {
@@ -338,7 +342,7 @@ func startQuotaService(t *testing.T, kernelType, protocol, userUUID string) (*Se
 	destLn, destAddr := startQuotaDest(t)
 	port := quotaFreePort(t)
 	users := []model.UserSpec{{ID: quotaHotUserID, UUID: userUUID}}
-	nc := quotaNodeSpec(protocol, port)
+	nc := quotaNodeSpec(kernelType, protocol, port)
 
 	var k kernel.Kernel
 	switch kernelType {
@@ -378,17 +382,26 @@ func startQuotaService(t *testing.T, kernelType, protocol, userUUID string) (*Se
 	}
 }
 
-func quotaNodeSpec(protocol string, port int) *model.NodeSpec {
-	return &model.NodeSpec{
+func quotaNodeSpec(kernelType, protocol string, port int) *model.NodeSpec {
+	nc := &model.NodeSpec{
 		Protocol:   protocol,
 		ListenIP:   "127.0.0.1",
 		ServerPort: port,
 		Network:    "tcp",
-		CustomRoutes: []map[string]any{{
-			"ip_cidr":  []string{"127.0.0.0/8"},
-			"outbound": "direct",
-		}},
 	}
+	if kernelType == "xray" {
+		nc.CustomRoutes = []map[string]any{{
+			"type":        "field",
+			"ip":          []string{"127.0.0.0/8"},
+			"outboundTag": "direct",
+		}}
+		return nc
+	}
+	nc.CustomRoutes = []map[string]any{{
+		"ip_cidr":  []string{"127.0.0.0/8"},
+		"outbound": "direct",
+	}}
+	return nc
 }
 
 func startQuotaDest(t *testing.T) (net.Listener, *net.TCPAddr) {
