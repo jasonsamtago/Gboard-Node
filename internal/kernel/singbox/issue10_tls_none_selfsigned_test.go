@@ -5,9 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"io"
 	"log/slog"
 	"net"
@@ -44,7 +41,8 @@ import (
 //  3. 不准：關 TLS、拆 ws、改成必須本機簽證書才起、強制改切 xray 當修。
 //  4. 測的是真正 start kernel／build inbound 證書路徑，不是只檢查 JSON 有無欄位。
 //
-// 這份只鎖失敗行為，不實作修正。
+// 這份鎖行為：Start 成功、config 不引用缺檔 self-signed、真聽端口。
+// 修法可以是 !HasCert()／空 PEM 就不寫 certificate_path，不必點到 CertMode 識別字。
 
 const (
 	issue10OfficialOpenSelfSigned = "open self-signed: no such file or directory"
@@ -93,8 +91,6 @@ func TestIssue10_SingBox_TLS1_CertModeNone_MustStartWithoutOpeningSelfSigned(t *
 	if err := issue10TCPPing(addr); err != nil {
 		t.Fatalf("官方 #10：sing-box 必須真的聽在 inbound 端口，不得只建 JSON：%v", err)
 	}
-
-	issue10AssertInboundCertPathHandlesCertModeNone(t)
 }
 
 func TestIssue10_SingBox_CreateInstance_MustNotReadSelfSignedPath(t *testing.T) {
@@ -119,41 +115,6 @@ func TestIssue10_SingBox_CreateInstance_MustNotReadSelfSignedPath(t *testing.T) 
 	t.Cleanup(k.Stop)
 	if !k.IsRunning() {
 		t.Fatal("create instance 後 kernel 沒在跑")
-	}
-
-	issue10AssertInboundCertPathHandlesCertModeNone(t)
-}
-
-// issue10AssertInboundCertPathHandlesCertModeNone 鎖的是真正建 inbound／
-// create instance 的證書路徑，不是只看產出 JSON 有沒有 tls 欄位。
-// 現況 buildTLSConfig／buildVMess 只看 PEM，沒看 cert_mode=none；
-// 官方 #10 就是這條路把 certificate_path 設成 self-signed，
-// box.New 才會 read certificate: open self-signed: no such file or directory。
-func issue10AssertInboundCertPathHandlesCertModeNone(t *testing.T) {
-	t.Helper()
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "config.go", nil, 0)
-	if err != nil {
-		t.Fatalf("parse config.go: %v", err)
-	}
-	var buildTLSSeesCertMode bool
-	ast.Inspect(file, func(n ast.Node) bool {
-		fn, ok := n.(*ast.FuncDecl)
-		if !ok || fn.Name == nil || fn.Name.Name != "buildTLSConfig" || fn.Body == nil {
-			return true
-		}
-		ast.Inspect(fn.Body, func(inner ast.Node) bool {
-			ident, ok := inner.(*ast.Ident)
-			if ok && ident.Name == "CertMode" {
-				buildTLSSeesCertMode = true
-			}
-			return true
-		})
-		return true
-	})
-	if !buildTLSSeesCertMode {
-		t.Fatalf("官方 #10：buildTLSConfig／建 inbound 證書路徑沒處理 cert_mode=none。現況 tls=1 仍可能把 certificate_path 設成 self-signed，create sing-box instance 會 %s。不准關 TLS、不准拆 ws、不准改成必須本機簽證書、不准改切 xray",
-			issue10OfficialOpenSelfSigned)
 	}
 }
 
@@ -315,6 +276,38 @@ func issue10AssertBuiltConfigDoesNotOpenSelfSigned(t *testing.T, cfg M) {
 	if got, _ := transport["type"].(string); !strings.EqualFold(got, "ws") {
 		t.Fatalf("不准拆 ws：transport.type=%q", got)
 	}
+	// 空 PEM／!HasCert() 時不准寫 certificate_path／key_path（不必點 CertMode 識別字）。
+	if tlsBlock, ok := in["tls"].(M); ok && tlsBlock != nil {
+		if issue10MissingTLSFilePath(tlsBlock["certificate_path"]) || issue10MissingTLSFilePath(tlsBlock["key_path"]) {
+			t.Fatalf("空 PEM 仍寫不存在的證書路徑，create instance 會 open 掛掉：tls=%s", issue10MapJSON(tlsBlock))
+		}
+	}
+}
+
+func issue10MissingTLSFilePath(v any) bool {
+	s, ok := v.(string)
+	if !ok {
+		return false
+	}
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+	if strings.EqualFold(s, "self-signed") {
+		return true
+	}
+	if _, err := os.Stat(s); err != nil {
+		return true
+	}
+	return false
+}
+
+func issue10MapJSON(v any) string {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Sprint(v)
+	}
+	return string(raw)
 }
 
 func issue10MarshalConfig(t *testing.T, spec *model.NodeSpec, tls kernel.TLSCert) []byte {
