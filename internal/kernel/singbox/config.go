@@ -822,7 +822,33 @@ func mergeCustomSingboxRoute(cfg M, customRoute map[string]any) {
 	}
 }
 
+func hy2Protocol(protocol string) bool {
+	switch strings.ToLower(strings.TrimSpace(protocol)) {
+	case "hysteria", "hysteria2", "hy2":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeHy2Spec(nc *model.NodeSpec) *model.NodeSpec {
+	if nc == nil || !hy2Protocol(nc.Protocol) {
+		return nc
+	}
+	if strings.EqualFold(strings.TrimSpace(nc.Protocol), "hysteria") {
+		return nc
+	}
+	// Protocols()／watchdog／node_type 用 hysteria2／hy2；inbound 走既有 hysteria+v2／hy2inbound。
+	out := *nc
+	out.Protocol = "hysteria"
+	if out.Version < 2 {
+		out.Version = 2
+	}
+	return &out
+}
+
 func buildInbound(nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) M {
+	nc = normalizeHy2Spec(nc)
 	base := M{
 		"tag":         nc.Protocol + "-in",
 		"listen":      "::",
@@ -1036,8 +1062,9 @@ func buildTrojan(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel.T
 // applyHy2ListenRange 把面板區間寫進 sing-box inbound 的 listen 規格。
 // cedar sing-box 的 listen_port 只能是單一 uint16，所以區間用 listen_port_range
 // （以及 sing-box 風格的 listen_ports start:end）表達完整 hop；單端口不寫這些欄位。
+// hysteria／hysteria2／hy2 都算 Hy2，別名也要寫區間。
 func applyHy2ListenRange(base M, nc *model.NodeSpec) {
-	if nc == nil || nc.Protocol != "hysteria" {
+	if nc == nil || !hy2Protocol(nc.Protocol) {
 		return
 	}
 	start, end, ok := parseListenPortRange(nc.ServerPortRange)
