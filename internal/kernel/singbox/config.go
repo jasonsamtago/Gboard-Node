@@ -62,10 +62,10 @@ func buildConfig(kcfg config.KernelConfig, nc *model.NodeSpec, users []model.Use
 	// Merge panel routes and static config routes
 	cfg["route"] = buildRoutes(nc.Routes, nc.CustomRouteRules, mergeRouteList(nc.CustomRoutes, kcfg.CustomRoute))
 
-	// Automatically enable rule_set caching (cache_file) when panel routes
-	// reference geoip:/geosite: entries so that the downloaded .srs rule_set
-	// files survive across process restarts.
-	if kernel.NeedsGeoIP(nc.Routes) || kernel.NeedsGeoSite(nc.Routes) || kernel.NeedsGeoIPRules(nc.CustomRouteRules) || kernel.NeedsGeoSiteRules(nc.CustomRouteRules) {
+	// Automatically enable rule_set caching (cache_file) when any route source
+	// references geoip:/geosite: (panel Routes, CustomRouteRules, CustomRoutes,
+	// kernel custom_route) so downloaded .srs files survive restarts.
+	if needIP, needSite := kernel.NeedsGeo(nc, kcfg.CustomRoute); needIP || needSite {
 		cfg["experimental"] = M{
 			"cache_file": M{
 				"enabled": true,
