@@ -442,6 +442,7 @@ func (c *Client) doRequest(method, path string, body []byte, ifNoneMatch string)
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-Server-Token", c.token)
 	if ifNoneMatch != "" {
 		req.Header.Set("If-None-Match", ifNoneMatch)
 	}
