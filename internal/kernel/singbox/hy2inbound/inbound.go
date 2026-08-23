@@ -34,14 +34,16 @@ func RegisterInbound(registry *inbound.Registry) {
 
 type Inbound struct {
 	inbound.Adapter
-	router    adapter.Router
-	logger    log.ContextLogger
-	listener  *listener.Listener
-	tlsConfig tls.ServerConfig
-	service   *hysteria2.Service[string]
-	userCount int
-	hop       Range
-	mux       net.PacketConn
+	router      adapter.Router
+	logger      log.ContextLogger
+	listener    *listener.Listener
+	tlsConfig   tls.ServerConfig
+	service     *hysteria2.Service[string]
+	serviceOpts hysteria2.ServiceOptions
+	packetConn  net.PacketConn
+	userCount   int
+	hop         Range
+	mux         net.PacketConn
 }
 
 func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.Hysteria2InboundOptions) (adapter.Inbound, error) {
@@ -121,7 +123,7 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 	} else {
 		udpTimeout = C.UDPTimeout
 	}
-	service, err := hysteria2.NewService[string](hysteria2.ServiceOptions{
+	in.serviceOpts = hysteria2.ServiceOptions{
 		Context:               ctx,
 		Logger:                logger,
 		BrutalDebug:           options.BrutalDebug,
@@ -133,7 +135,8 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 		UDPTimeout:            udpTimeout,
 		Handler:               in,
 		MasqueradeHandler:     masqueradeHandler,
-	})
+	}
+	service, err := hysteria2.NewService[string](in.serviceOpts)
 	if err != nil {
 		return nil, err
 	}
@@ -199,7 +202,9 @@ func (h *Inbound) Start(stage adapter.StartStage) error {
 	if err != nil {
 		return err
 	}
-	return h.service.Start(packetConn)
+	// quic.Listener.Close() 會順手關底下 UDP；熱換 Service 時埠必須留著。
+	h.packetConn = stickyPacketConn{PacketConn: packetConn}
+	return h.service.Start(h.packetConn)
 }
 
 func (h *Inbound) listenPacket() (net.PacketConn, error) {

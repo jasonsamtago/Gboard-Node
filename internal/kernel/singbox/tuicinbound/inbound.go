@@ -28,12 +28,14 @@ func RegisterInbound(registry *inbound.Registry) {
 
 type Inbound struct {
 	inbound.Adapter
-	router    adapter.ConnectionRouterEx
-	logger    log.ContextLogger
-	listener  *listener.Listener
-	tlsConfig tls.ServerConfig
-	server    *tuic.Service[string]
-	userCount int
+	router     adapter.ConnectionRouterEx
+	logger     log.ContextLogger
+	listener   *listener.Listener
+	tlsConfig  tls.ServerConfig
+	server     *tuic.Service[string]
+	serverOpts tuic.ServiceOptions
+	packetConn net.PacketConn
+	userCount  int
 }
 
 func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.TUICInboundOptions) (adapter.Inbound, error) {
@@ -62,7 +64,7 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 	} else {
 		udpTimeout = C.UDPTimeout
 	}
-	service, err := tuic.NewService[string](tuic.ServiceOptions{
+	inbound.serverOpts = tuic.ServiceOptions{
 		Context:           ctx,
 		Logger:            logger,
 		TLSConfig:         tlsConfig,
@@ -72,7 +74,8 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 		Heartbeat:         time.Duration(options.Heartbeat),
 		UDPTimeout:        udpTimeout,
 		Handler:           inbound,
-	})
+	}
+	service, err := tuic.NewService[string](inbound.serverOpts)
 	if err != nil {
 		return nil, err
 	}
@@ -142,7 +145,8 @@ func (h *Inbound) Start(stage adapter.StartStage) error {
 	if err != nil {
 		return err
 	}
-	return h.server.Start(packetConn)
+	h.packetConn = stickyPacketConn{PacketConn: packetConn}
+	return h.server.Start(h.packetConn)
 }
 
 func (h *Inbound) Close() error {
