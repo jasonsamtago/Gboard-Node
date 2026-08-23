@@ -1,7 +1,6 @@
-// Package vlessinbound 覆寫官方 VLESS inbound：熱抽／加用戶時用新的
-// vless.Service 原子替換，不准跟 NewConnection 對打同一張 user map。
-// cleartext ws 設了 Host 時仍先核對 HTTP Host。
-package vlessinbound
+// Package vmessinbound 覆寫官方 VMess inbound：熱抽／加用戶時用新的
+// vmess.Service 原子替換，不准跟 NewConnection 對打同一張 user map。
+package vmessinbound
 
 import (
 	"context"
@@ -9,7 +8,6 @@ import (
 	"os"
 	"sync/atomic"
 
-	"github.com/jasonsamtago/Gboard-Node/internal/kernel/hostfilter"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/inbound"
 	"github.com/sagernet/sing-box/common/listener"
@@ -20,8 +18,8 @@ import (
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-box/transport/v2ray"
+	"github.com/sagernet/sing-vmess"
 	"github.com/sagernet/sing-vmess/packetaddr"
-	"github.com/sagernet/sing-vmess/vless"
 	"github.com/sagernet/sing/common"
 	"github.com/sagernet/sing/common/auth"
 	"github.com/sagernet/sing/common/bufio"
@@ -30,86 +28,87 @@ import (
 	"github.com/sagernet/sing/common/logger"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/common/ntp"
 )
 
 func RegisterInbound(registry *inbound.Registry) {
-	inbound.Register[option.VLESSInboundOptions](registry, C.TypeVLESS, NewInbound)
+	inbound.Register[option.VMessInboundOptions](registry, C.TypeVMess, NewInbound)
 }
 
 var _ adapter.TCPInjectableInbound = (*Inbound)(nil)
 
 type Inbound struct {
 	inbound.Adapter
-	ctx         context.Context
-	router      adapter.ConnectionRouterEx
-	logger      logger.ContextLogger
-	listener    *listener.Listener
-	handler     vless.Handler
-	users       atomic.Value // []option.VLESSUser
-	service     atomic.Pointer[vless.Service[int]]
-	tlsConfig   tls.ServerConfig
-	transport   adapter.V2RayServerTransport
-	requestHost string
+	ctx            context.Context
+	router         adapter.ConnectionRouterEx
+	logger         logger.ContextLogger
+	listener       *listener.Listener
+	handler        vmess.Handler
+	serviceOptions []vmess.ServiceOption
+	users          atomic.Value // []option.VMessUser
+	service        atomic.Pointer[vmess.Service[int]]
+	started        atomic.Bool
+	tlsConfig      tls.ServerConfig
+	transport      adapter.V2RayServerTransport
 }
 
-func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.VLESSInboundOptions) (adapter.Inbound, error) {
-	inbound := &Inbound{
-		Adapter: inbound.NewAdapter(C.TypeVLESS, tag),
+func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.VMessInboundOptions) (adapter.Inbound, error) {
+	in := &Inbound{
+		Adapter: inbound.NewAdapter(C.TypeVMess, tag),
 		ctx:     ctx,
 		router:  uot.NewRouter(router, logger),
 		logger:  logger,
 	}
-	if shouldFilterWSHost(options) {
-		inbound.requestHost = websocketRequestHost(options)
-	}
-	inbound.storeUsers(options.Users)
+	in.storeUsers(options.Users)
 	var err error
-	inbound.router, err = mux.NewRouterWithOptions(inbound.router, logger, common.PtrValueOrDefault(options.Multiplex))
+	in.router, err = mux.NewRouterWithOptions(in.router, logger, common.PtrValueOrDefault(options.Multiplex))
 	if err != nil {
 		return nil, err
 	}
-	inbound.handler = adapter.NewUpstreamContextHandlerEx(inbound.newConnectionEx, inbound.newPacketConnectionEx)
-	if err = inbound.replaceService(options.Users); err != nil {
+	if timeFunc := ntp.TimeFuncFromContext(ctx); timeFunc != nil {
+		in.serviceOptions = append(in.serviceOptions, vmess.ServiceWithTimeFunc(timeFunc))
+	}
+	if options.Transport != nil && options.Transport.Type != "" {
+		in.serviceOptions = append(in.serviceOptions, vmess.ServiceWithDisableHeaderProtection())
+	}
+	in.handler = adapter.NewUpstreamContextHandlerEx(in.newConnectionEx, in.newPacketConnectionEx)
+	if err = in.replaceService(options.Users); err != nil {
 		return nil, err
 	}
 	if options.TLS != nil {
-		inbound.tlsConfig, err = tls.NewServerWithOptions(tls.ServerOptions{
-			Context: ctx,
-			Logger:  logger,
-			Options: common.PtrValueOrDefault(options.TLS),
-			KTLSCompatible: common.PtrValueOrDefault(options.Transport).Type == "" &&
-				!common.PtrValueOrDefault(options.Multiplex).Enabled &&
-				common.All(options.Users, func(it option.VLESSUser) bool {
-					return it.Flow == ""
-				}),
-		})
+		in.tlsConfig, err = tls.NewServer(ctx, logger, common.PtrValueOrDefault(options.TLS))
 		if err != nil {
 			return nil, err
 		}
 	}
 	if options.Transport != nil {
-		inbound.transport, err = v2ray.NewServerTransport(ctx, logger, common.PtrValueOrDefault(options.Transport), inbound.tlsConfig, (*inboundTransportHandler)(inbound))
+		in.transport, err = v2ray.NewServerTransport(ctx, logger, common.PtrValueOrDefault(options.Transport), in.tlsConfig, (*inboundTransportHandler)(in))
 		if err != nil {
 			return nil, E.Cause(err, "create server transport: ", options.Transport.Type)
 		}
 	}
-	inbound.listener = listener.New(listener.Options{
+	in.listener = listener.New(listener.Options{
 		Context:           ctx,
 		Logger:            logger,
 		Network:           []string{N.NetworkTCP},
 		Listen:            options.ListenOptions,
-		ConnectionHandler: inbound,
+		ConnectionHandler: in,
 	})
-	return inbound, nil
+	return in, nil
 }
 
 func (h *Inbound) Start(stage adapter.StartStage) error {
 	if stage != adapter.StartStateStart {
 		return nil
 	}
+	h.started.Store(true)
+	if svc := h.service.Load(); svc != nil {
+		if err := svc.Start(); err != nil {
+			return err
+		}
+	}
 	if h.tlsConfig != nil {
-		err := h.tlsConfig.Start()
-		if err != nil {
+		if err := h.tlsConfig.Start(); err != nil {
 			return err
 		}
 	}
@@ -120,9 +119,6 @@ func (h *Inbound) Start(stage adapter.StartStage) error {
 		tcpListener, err := h.listener.ListenTCP()
 		if err != nil {
 			return err
-		}
-		if h.requestHost != "" && h.tlsConfig == nil {
-			tcpListener = hostfilter.WrapListener(tcpListener, h.requestHost)
 		}
 		go func() {
 			sErr := h.transport.Serve(tcpListener)
@@ -240,29 +236,4 @@ func (h *inboundTransportHandler) NewConnectionEx(ctx context.Context, conn net.
 	//nolint:staticcheck
 	h.logger.InfoContext(ctx, "inbound connection from ", metadata.Source)
 	(*Inbound)(h).NewConnectionEx(ctx, conn, metadata, onClose)
-}
-
-// shouldFilterWSHost is true only for cleartext ws+Host.
-// TLS 時第一包是 ClientHello，raw peek 會把握手掐掉；沒設 Host 必須走官方 inbound。
-func shouldFilterWSHost(options option.VLESSInboundOptions) bool {
-	if websocketRequestHost(options) == "" {
-		return false
-	}
-	if options.TLS != nil && options.TLS.Enabled {
-		return false
-	}
-	return true
-}
-
-func websocketRequestHost(options option.VLESSInboundOptions) string {
-	if options.Transport == nil || options.Transport.Type != C.V2RayTransportTypeWebsocket {
-		return ""
-	}
-	headers := options.Transport.WebsocketOptions.Headers
-	for _, key := range []string{"Host", "host"} {
-		if vals := headers[key]; len(vals) > 0 && vals[0] != "" {
-			return vals[0]
-		}
-	}
-	return ""
 }
