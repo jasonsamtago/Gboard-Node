@@ -57,8 +57,7 @@ import (
 // 不准當修：關掉 hy2／tuic、改成只能用 vless／vmess、把「起核失敗」當成功。
 // 與 #33（內核退出 watchdog）、#49（熱刪 panic）分開。
 // 必須走 production hy2inbound／tuicinbound（override 後的那套）。
-//
-// 這份測試只鎖行為，不實作修正。未修 tip 必須紅。
+// hysteria2／hy2 正規成 hysteria 再進既有 hy2inbound 路徑也算過；不鎖必須 case 別名。
 
 const (
 	issue65UserID   = 65
@@ -155,6 +154,16 @@ func TestBuildInbound_Hysteria2別名必須產出inbound(t *testing.T) {
 		if _, ok := inbound["listen_port"]; !ok {
 			t.Errorf("protocol %q inbound 必須有 listen_port", proto)
 		}
+		hop := M{"listen_port": 26598}
+		applyHy2ListenRange(hop, &model.NodeSpec{
+			Protocol:        proto,
+			Version:         2,
+			ServerPort:      26598,
+			ServerPortRange: "26598-26600",
+		})
+		if _, ok := hop["listen_port_range"]; !ok {
+			t.Errorf("applyHy2ListenRange 必須認別名 %q 並寫區間", proto)
+		}
 	}
 }
 
@@ -175,9 +184,6 @@ func TestHy2TUIC_仍走production_inbound不准關協議(t *testing.T) {
 	}
 	if !bytes.Contains(configSrc, []byte(`case "hysteria"`)) || !bytes.Contains(configSrc, []byte(`case "tuic"`)) {
 		t.Fatal("關掉 Hy2／TUIC 當修：buildInbound 不再產出 hysteria／tuic")
-	}
-	if !bytes.Contains(configSrc, []byte(`case "hysteria2"`)) && !bytes.Contains(configSrc, []byte(`case "hy2"`)) {
-		t.Fatal("protocol hysteria2／hy2 沒進 buildInbound：Start 會成功但沒 inbound、埠沒在聽（官方 #65）")
 	}
 	if bytes.Contains(startSrc, []byte("kernel/xray")) || bytes.Contains(startSrc, []byte("xray.New")) {
 		t.Fatal("不准改切 xray 當修")
