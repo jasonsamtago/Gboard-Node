@@ -207,9 +207,6 @@ func (s *SingBox) ensureGeoData(nc *model.NodeSpec) {
 	}
 }
 
-// recycleOldBox gracefully shuts down a previous sing-box instance in the
-// background. It closes listen sockets first, waits for connections to drain,
-// then hard-closes. This avoids blocking the new instance's startup.
 func releaseInboundListeners(ctx context.Context) {
 	if ctx == nil {
 		return
@@ -219,6 +216,8 @@ func releaseInboundListeners(ctx context.Context) {
 	}
 }
 
+// recycleOldBox shuts down a previous instance in the background after
+// Start has already released its listeners.
 func recycleOldBox(oldBox *box.Box, oldCancel context.CancelFunc, oldCtx context.Context, oldTracker *ConnTracker) {
 	// Step 1: close listen sockets (no-op if Start already released them).
 	releaseInboundListeners(oldCtx)
