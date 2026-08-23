@@ -272,15 +272,19 @@ func (c *Client) GetUsers() ([]User, error) {
 		return nil, fmt.Errorf("status %d: %s", resp.StatusCode, body)
 	}
 
-	var usersResp UsersResponse
-	if err := json.NewDecoder(resp.Body).Decode(&usersResp); err != nil {
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read users: %w", err)
+	}
+	users, _, err := decodeUsersPayload(body)
+	if err != nil {
 		return nil, fmt.Errorf("decode: %w", err)
 	}
 
 	if etag := resp.Header.Get("ETag"); etag != "" {
 		c.userETag = etag
 	}
-	return usersResp.Users, nil
+	return users, nil
 }
 
 // PushTraffic submits per-user traffic data

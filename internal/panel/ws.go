@@ -388,36 +388,36 @@ func (w *WSClient) handleDataEvent(msg wsMessage) {
 
 	case WSEventSyncUsers:
 		nlog.Core().Debug("ws sync users event received")
-		var p syncUsersPayload
-		if err := decodeData(msg.Data, &p); err != nil {
+		users, nodeID, err := decodeUsersPayload(msg.Data)
+		if err != nil {
 			nlog.Core().Warn("ws: cannot decode users payload", "error", err)
 			return
 		}
-		if len(p.Users) == 0 {
+		if len(users) == 0 {
 			nlog.Core().Warn("ws: users payload empty")
 			return
 		}
-		event.Users = p.Users
-		event.NodeID = p.NodeID
+		event.Users = users
+		event.NodeID = nodeID
 
 	case WSEventSyncUserDelta:
 		nlog.Core().Debug("ws sync user delta event received")
-		var p syncUserDeltaPayload
-		if err := decodeData(msg.Data, &p); err != nil {
+		users, nodeID, action, err := decodeUsersDeltaPayload(msg.Data)
+		if err != nil {
 			nlog.Core().Warn("ws: cannot decode user delta payload", "error", err)
 			return
 		}
-		if p.Action == "" {
+		if action == "" {
 			nlog.Core().Warn("ws: user delta payload missing action")
 			return
 		}
-		if len(p.Users) == 0 {
+		if len(users) == 0 {
 			nlog.Core().Warn("ws: user delta payload has no users")
 			return
 		}
-		event.DeltaAction = p.Action
-		event.DeltaUsers = p.Users
-		event.NodeID = p.NodeID
+		event.DeltaAction = action
+		event.DeltaUsers = users
+		event.NodeID = nodeID
 
 	case WSEventSyncDevices:
 		nlog.Core().Debug("ws sync devices event received")
