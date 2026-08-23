@@ -781,12 +781,26 @@ func (s *Service) ensureRunning() bool {
 
 // applyUserUpdate replaces the full user set and hot-swaps the kernel.
 // Called from WS sync.users and REST polling.
+//
+// 必須先寫入新名單再 ensureRunning：0G 抽光後核已停、lastUsers 為空，
+// 若先 ensureRunning() 會直接放棄，1G 恢復名單永遠進不了核。
 func (s *Service) applyUserUpdate(ctx context.Context, users []model.UserSpec, newHash string) {
-	if !s.ensureRunning() {
+	prevUsers, prevHash := s.prepareUserState(users)
+
+	if !s.kernel.IsRunning() {
+		if !s.ensureRunning() {
+			// 空名單＋核停：0G 已生效，不必起核。有名單卻起不來才回滾。
+			if len(users) > 0 && s.lastConfig != nil {
+				s.restoreUserState(prevUsers, prevHash)
+			}
+			return
+		}
+		if newHash != "" {
+			s.lastUserHash = newHash
+		}
 		return
 	}
 
-	prevUsers, prevHash := s.prepareUserState(users)
 	added, removed, err := s.kernel.UpdateUsers(users)
 	if err != nil {
 		nlog.Core().Warn(fmt.Sprintf("UpdateUsers failed, restarting kernel: %v", err))
@@ -814,7 +828,14 @@ func (s *Service) applyUserDelta(ctx context.Context, action string, deltaUsers 
 		}
 		merged := mergeUsers(s.lastUsers, deltaUsers)
 
-		if !s.ensureRunning() {
+		if !s.kernel.IsRunning() {
+			prevUsers, prevHash := s.prepareUserState(merged)
+			if !s.ensureRunning() {
+				if len(merged) > 0 && s.lastConfig != nil {
+					s.restoreUserState(prevUsers, prevHash)
+				}
+				return
+			}
 			return
 		}
 
