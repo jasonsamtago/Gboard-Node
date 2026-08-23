@@ -2,6 +2,7 @@ package singbox
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net"
 	"path/filepath"
@@ -126,8 +127,18 @@ func outboundConfigToSingbox(oc model.OutboundConfig) M {
 			}
 		}
 	} else {
+		flattenServers := socksOrShadowsocks(oc.Protocol)
 		for k, v := range oc.Settings {
+			// sing-box socks／ss 是扁的 server／server_port，沒有 servers。
+			// xray／docs 的 settings.servers 原樣攤平會炸 official #35：
+			// parse sing-box options: outbounds[1].servers: json: unknown field "servers"
+			if flattenServers && k == "servers" {
+				continue
+			}
 			m[k] = v
+		}
+		if flattenServers {
+			applyXrayServersToSingbox(m, oc.Settings)
 		}
 	}
 
@@ -135,6 +146,135 @@ func outboundConfigToSingbox(oc model.OutboundConfig) M {
 		m["proxy_tag"] = oc.ProxyTag
 	}
 	return m
+}
+
+func socksOrShadowsocks(protocol string) bool {
+	switch strings.ToLower(strings.TrimSpace(protocol)) {
+	case "socks", "shadowsocks":
+		return true
+	default:
+		return false
+	}
+}
+
+// applyXrayServersToSingbox 把 xray／docs 的 settings.servers[0] 轉成
+// sing-box 認得的扁欄位。官方評論已有的 server／server_port 等扁欄位當基線，不覆蓋。
+func applyXrayServersToSingbox(m M, settings map[string]any) {
+	first := firstServerObject(settings["servers"])
+	if first == nil {
+		return
+	}
+
+	if addr := firstNonEmptyString(first, "address", "server"); addr != "" {
+		setIfAbsent(m, "server", addr)
+	}
+	if port, ok := firstServerPort(first, "port", "server_port"); ok {
+		setIfAbsent(m, "server_port", port)
+	}
+	for _, key := range []string{"method", "password", "plugin", "plugin_opts", "network", "version", "username"} {
+		if v, exists := first[key]; exists {
+			setIfAbsent(m, key, v)
+		}
+	}
+	if users := firstServerUsers(first["users"]); len(users) > 0 {
+		u := users[0]
+		if name := firstNonEmptyString(u, "user", "username"); name != "" {
+			setIfAbsent(m, "username", name)
+		}
+		if pass := firstNonEmptyString(u, "pass", "password"); pass != "" {
+			setIfAbsent(m, "password", pass)
+		}
+	}
+}
+
+func setIfAbsent(m M, key string, val any) {
+	if _, exists := m[key]; exists {
+		return
+	}
+	m[key] = val
+}
+
+func firstServerObject(raw any) map[string]any {
+	switch list := raw.(type) {
+	case []any:
+		if len(list) == 0 {
+			return nil
+		}
+		return asStringAnyMap(list[0])
+	case []map[string]any:
+		if len(list) == 0 {
+			return nil
+		}
+		return list[0]
+	default:
+		return asStringAnyMap(raw)
+	}
+}
+
+func firstServerUsers(raw any) []map[string]any {
+	switch list := raw.(type) {
+	case []any:
+		out := make([]map[string]any, 0, len(list))
+		for _, item := range list {
+			if m := asStringAnyMap(item); m != nil {
+				out = append(out, m)
+			}
+		}
+		return out
+	case []map[string]any:
+		return list
+	default:
+		return nil
+	}
+}
+
+func asStringAnyMap(v any) map[string]any {
+	m, _ := v.(map[string]any)
+	return m
+}
+
+func firstNonEmptyString(m map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if s, ok := m[key].(string); ok && strings.TrimSpace(s) != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+func firstServerPort(m map[string]any, keys ...string) (int, bool) {
+	for _, key := range keys {
+		if port, ok := coerceListenPort(m[key]); ok {
+			return port, true
+		}
+	}
+	return 0, false
+}
+
+func coerceListenPort(v any) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		if n >= 1 && n <= 65535 {
+			return n, true
+		}
+	case int32:
+		return coerceListenPort(int(n))
+	case int64:
+		return coerceListenPort(int(n))
+	case float64:
+		if n == float64(int(n)) {
+			return coerceListenPort(int(n))
+		}
+	case json.Number:
+		if p, err := n.Int64(); err == nil {
+			return coerceListenPort(int(p))
+		}
+	case string:
+		if p, err := strconv.Atoi(strings.TrimSpace(n)); err == nil {
+			return coerceListenPort(p)
+		}
+	}
+	return 0, false
 }
 
 func mergeRouteList(a, b []map[string]any) []map[string]any {
