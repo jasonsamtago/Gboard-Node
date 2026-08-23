@@ -66,7 +66,9 @@ func buildConfig(kcfg config.KernelConfig, nc *model.NodeSpec, users []model.Use
 	// Automatically enable rule_set caching (cache_file) when any route source
 	// references geoip:/geosite: (panel Routes, CustomRouteRules, CustomRoutes,
 	// kernel custom_route) so downloaded .srs files survive restarts.
-	if needIP, needSite := kernel.NeedsGeo(nc, kcfg.CustomRoute); needIP || needSite {
+	// Official #14 remote binary rule_set also needs cache_file to persist .srs.
+	needIP, needSite := kernel.NeedsGeo(nc, kcfg.CustomRoute)
+	if needIP || needSite || routeHasRemoteRuleSet(cfg["route"]) {
 		cfg["experimental"] = M{
 			"cache_file": M{
 				"enabled": true,
@@ -287,6 +289,8 @@ func mergeRouteList(a, b []map[string]any) []map[string]any {
 
 func buildRoutes(panelRoutes []model.RouteRule, customRules []model.CustomRouteRule, custom []map[string]any) M {
 	var rules []M
+	var ruleSets []M
+	extras := M{}
 
 	// Structured custom routes now take the highest priority for panel-managed overrides.
 	for _, rule := range customRules {
@@ -297,8 +301,16 @@ func buildRoutes(panelRoutes []model.RouteRule, customRules []model.CustomRouteR
 	}
 
 	// Raw custom routes remain the escape hatch, but no longer outrank structured rules.
+	// Official #14: rule_set definitions (local/remote binary .srs) must land in
+	// route.rule_set. Rules keep only tag references — never dump the whole
+	// wrapper into route.rules, and never rewrite to deprecated geosite.
 	for _, cr := range custom {
-		rules = append(rules, M(cr))
+		extracted, sets, extra := splitCustomRouteRuleSet(cr)
+		rules = append(rules, extracted...)
+		ruleSets = appendRuleSetsByTag(ruleSets, sets)
+		for k, v := range extra {
+			extras[k] = v
+		}
 	}
 
 	// Standard blocks for private IPv4 and IPv6 ranges to prevent SSRF.
@@ -330,10 +342,250 @@ func buildRoutes(panelRoutes []model.RouteRule, customRules []model.CustomRouteR
 		rules = append(rules, compilePanelRouteRule(pr)...)
 	}
 
-	return M{
+	route := M{
 		"final": "direct",
 		"rules": rules,
 	}
+	if len(ruleSets) > 0 {
+		route["rule_set"] = ruleSets
+	}
+	for k, v := range extras {
+		if k == "rules" || k == "rule_set" {
+			continue
+		}
+		route[k] = v
+	}
+	return route
+}
+
+// splitCustomRouteRuleSet lifts sing-box rule_set definitions out of a raw
+// custom_routes / custom_route item. Official #14 shapes:
+//   - wrapper {rules, rule_set: [{tag,type,format,url|path}]}
+//   - standalone definition {tag,type,format,url|path}
+//   - rule {rule_set: "tag"|["tag"], outbound: ...}
+func splitCustomRouteRuleSet(cr map[string]any) (rules []M, sets []M, extra M) {
+	if cr == nil {
+		return nil, nil, nil
+	}
+	item := cloneTopMap(cr)
+
+	if isRuleSetDefinition(item) {
+		return nil, []M{item}, nil
+	}
+	if isRouteWrapper(item) {
+		sets = appendRuleSetsByTag(sets, collectRuleSetDefs(item["rule_set"]))
+		for _, nested := range collectMapList(item["rules"]) {
+			nestedRules, nestedSets, _ := splitCustomRouteRuleSet(nested)
+			rules = append(rules, nestedRules...)
+			sets = appendRuleSetsByTag(sets, nestedSets)
+		}
+		for k, v := range item {
+			if k == "rules" || k == "rule_set" {
+				continue
+			}
+			if extra == nil {
+				extra = M{}
+			}
+			extra[k] = v
+		}
+		return rules, sets, extra
+	}
+
+	defs, tags := peelRuleSetField(item["rule_set"])
+	sets = appendRuleSetsByTag(sets, defs)
+	if tags != nil {
+		if len(tags) == 1 {
+			item["rule_set"] = tags[0]
+		} else {
+			item["rule_set"] = tags
+		}
+	}
+	return []M{item}, sets, nil
+}
+
+func isRuleSetDefinition(m map[string]any) bool {
+	tag, _ := m["tag"].(string)
+	if strings.TrimSpace(tag) == "" {
+		return false
+	}
+	typ := strings.ToLower(strings.TrimSpace(anyString(m["type"])))
+	format := strings.ToLower(strings.TrimSpace(anyString(m["format"])))
+	switch typ {
+	case "local", "remote", "inline":
+		return true
+	}
+	switch format {
+	case "binary", "source":
+		return true
+	}
+	_, hasURL := m["url"]
+	_, hasPath := m["path"]
+	return hasURL || (hasPath && (typ != "" || format != ""))
+}
+
+func isRouteWrapper(m map[string]any) bool {
+	if looksLikeList(m["rules"]) {
+		return true
+	}
+	if looksLikeRule(m) {
+		return false
+	}
+	return len(collectRuleSetDefs(m["rule_set"])) > 0
+}
+
+func looksLikeRule(m map[string]any) bool {
+	for _, key := range []string{
+		"outbound", "action", "domain", "domain_suffix", "domain_keyword",
+		"ip_cidr", "source_ip_cidr", "protocol", "network", "port", "port_range",
+		"ip_is_private", "clash_mode",
+	} {
+		if _, ok := m[key]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func peelRuleSetField(raw any) (defs []M, tags []string) {
+	if raw == nil {
+		return nil, nil
+	}
+	if s := anyString(raw); s != "" && !looksLikeList(raw) {
+		return nil, []string{s}
+	}
+	switch list := raw.(type) {
+	case []string:
+		return nil, append([]string(nil), list...)
+	case []any:
+		for _, item := range list {
+			if s := anyString(item); s != "" && !isRuleSetDefinitionMap(item) {
+				tags = append(tags, s)
+				continue
+			}
+			if m, ok := item.(map[string]any); ok {
+				if isRuleSetDefinition(m) {
+					cloned := cloneTopMap(m)
+					defs = append(defs, cloned)
+					if tag, _ := cloned["tag"].(string); tag != "" {
+						tags = append(tags, tag)
+					}
+				}
+			}
+		}
+		return defs, tags
+	case []map[string]any:
+		for _, m := range list {
+			if isRuleSetDefinition(m) {
+				cloned := cloneTopMap(m)
+				defs = append(defs, cloned)
+				if tag, _ := cloned["tag"].(string); tag != "" {
+					tags = append(tags, tag)
+				}
+			} else if tag, _ := m["tag"].(string); tag != "" {
+				tags = append(tags, tag)
+			}
+		}
+		return defs, tags
+	case map[string]any:
+		if isRuleSetDefinition(list) {
+			cloned := cloneTopMap(list)
+			if tag, _ := cloned["tag"].(string); tag != "" {
+				return []M{cloned}, []string{tag}
+			}
+			return []M{cloned}, nil
+		}
+	}
+	return nil, nil
+}
+
+func isRuleSetDefinitionMap(v any) bool {
+	m, ok := v.(map[string]any)
+	return ok && isRuleSetDefinition(m)
+}
+
+func collectRuleSetDefs(raw any) []M {
+	defs, _ := peelRuleSetField(raw)
+	if defs != nil {
+		return defs
+	}
+	if m, ok := raw.(map[string]any); ok && isRuleSetDefinition(m) {
+		return []M{cloneTopMap(m)}
+	}
+	return nil
+}
+
+func collectMapList(raw any) []map[string]any {
+	switch list := raw.(type) {
+	case []map[string]any:
+		return list
+	case []any:
+		out := make([]map[string]any, 0, len(list))
+		for _, item := range list {
+			if m, ok := item.(map[string]any); ok {
+				out = append(out, m)
+			}
+		}
+		return out
+	case map[string]any:
+		return []map[string]any{list}
+	default:
+		return nil
+	}
+}
+
+func appendRuleSetsByTag(dst, src []M) []M {
+	seen := make(map[string]bool, len(dst))
+	for _, item := range dst {
+		if tag, _ := item["tag"].(string); tag != "" {
+			seen[tag] = true
+		}
+	}
+	for _, item := range src {
+		tag, _ := item["tag"].(string)
+		if tag != "" && seen[tag] {
+			continue
+		}
+		if tag != "" {
+			seen[tag] = true
+		}
+		dst = append(dst, item)
+	}
+	return dst
+}
+
+func cloneTopMap(m map[string]any) M {
+	out := make(M, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
+func looksLikeList(v any) bool {
+	switch v.(type) {
+	case []any, []map[string]any, []string:
+		return true
+	default:
+		return false
+	}
+}
+
+func anyString(v any) string {
+	s, _ := v.(string)
+	return s
+}
+
+func routeHasRemoteRuleSet(route any) bool {
+	m, ok := route.(M)
+	if !ok {
+		return false
+	}
+	for _, item := range collectMapList(m["rule_set"]) {
+		if strings.EqualFold(anyString(item["type"]), "remote") {
+			return true
+		}
+	}
+	return false
 }
 
 func compilePanelRouteRule(pr model.RouteRule) []M {
