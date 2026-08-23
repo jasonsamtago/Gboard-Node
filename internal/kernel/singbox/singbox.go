@@ -20,6 +20,7 @@ import (
 
 	"github.com/jasonsamtago/Gboard-Node/internal/config"
 	"github.com/jasonsamtago/Gboard-Node/internal/kernel"
+	"github.com/jasonsamtago/Gboard-Node/internal/kernel/geodata"
 	"github.com/jasonsamtago/Gboard-Node/internal/kernel/singbox/hy2inbound"
 	"github.com/jasonsamtago/Gboard-Node/internal/kernel/singbox/tuicinbound"
 	"github.com/jasonsamtago/Gboard-Node/internal/kernel/singbox/vlessinbound"
@@ -98,6 +99,8 @@ func (s *SingBox) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	s.ensureGeoData(nodeConfig)
+
 	cfgMap := buildConfig(s.cfg, nodeConfig, users, tls)
 	stripHy2HopListenFields(cfgMap)
 	data, err := json.Marshal(cfgMap)
@@ -167,6 +170,18 @@ func (s *SingBox) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls 
 
 	nlog.Core().Debug("sing-box started", "users", len(users))
 	return nil
+}
+
+// ensureGeoData downloads geo databases when any route source references
+// geoip/geosite, including CustomRouteRules / CustomRoutes / kernel CustomRoute.
+func (s *SingBox) ensureGeoData(nc *model.NodeSpec) {
+	needIP, needSite := kernel.NeedsGeo(nc, s.cfg.CustomRoute)
+	if !needIP && !needSite {
+		return
+	}
+	if err := geodata.Ensure(s.cfg.GeoDataDir, needIP, needSite, "singbox"); err != nil {
+		nlog.Core().Warn("geo database unavailable", "error", err)
+	}
 }
 
 // recycleOldBox gracefully shuts down a previous sing-box instance in the
