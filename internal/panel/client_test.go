@@ -24,6 +24,9 @@ func TestGetConfig_Success(t *testing.T) {
 		if r.URL.Path != "/api/v1/server/UniProxy/config" {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
+		if r.Header.Get("X-Server-Token") != "test-token" {
+			t.Errorf("missing X-Server-Token header")
+		}
 		if r.URL.Query().Get("token") != "test-token" {
 			t.Errorf("missing token in query")
 		}
