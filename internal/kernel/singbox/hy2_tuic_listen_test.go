@@ -43,16 +43,20 @@ import (
 // 官方 cedar2025/Xboard-Node #65：tuic 協議問題，vless 等都可以正常使用，
 // hy2／tuic 啟動後連不上節點，節點端實時未監聽端口。
 //
+// 現行 production 路徑：Protocols()／watchdog／node_type 認 hysteria2，
+// 但 buildInbound 只 switch "hysteria"。Protocol=hysteria2／hy2 時
+// Start 回成功、IsRunning=true，inbounds 是空的，配置埠沒在聽——
+// 正是官方「process 活著、實時未監聽」。走 hy2inbound／tuicinbound。
+//
 // 審核 2 鎖定：
-//  1. 面板起 hy2／tuic 後，配置埠必須真在聽（ss／dial／ListenUDP 占用），
+//  1. 面板起 hy2／tuic 後，配置埠必須真在聽（ss／ListenUDP／/proc/net/udp），
 //     不准只 process／IsRunning 活著。
 //  2. 客戶端用正確憑證能連上（至少 handshake／建連成功）。
 //  3. vless／vmess 正常時 hy2／tuic 也要通，不准只修一邊。
 //
 // 不准當修：關掉 hy2／tuic、改成只能用 vless／vmess、把「起核失敗」當成功。
 // 與 #33（內核退出 watchdog）、#49（熱刪 panic）分開。
-// 必須走 production hy2inbound／tuicinbound（override 後的那套），
-// 不准測已被覆寫的 stock protocol/hysteria2／protocol/tuic。
+// 必須走 production hy2inbound／tuicinbound（override 後的那套）。
 //
 // 這份測試只鎖行為，不實作修正。未修 tip 必須紅。
 
@@ -64,9 +68,15 @@ const (
 )
 
 func TestHy2_Start後配置埠必須真在聽(t *testing.T) {
-	k, port, _, stop := startIssue65Kernel(t, "hysteria")
-	defer stop()
-	assertIssue65UDPListening(t, "hy2", port, k)
+	// Protocols()／watchdog／node_type 都認 hysteria2；buildInbound 若只認
+	// hysteria，Start 會成功、process 活著，但沒 inbound、埠沒在聽——官方 #65。
+	for _, proto := range []string{"hysteria", "hysteria2", "hy2"} {
+		t.Run(proto, func(t *testing.T) {
+			k, port, _, stop := startIssue65Kernel(t, proto)
+			defer stop()
+			assertIssue65UDPListening(t, "hy2/"+proto, port, k)
+		})
+	}
 }
 
 func TestTUIC_Start後配置埠必須真在聽(t *testing.T) {
@@ -76,11 +86,15 @@ func TestTUIC_Start後配置埠必須真在聽(t *testing.T) {
 }
 
 func TestHy2_正確憑證必須能handshake建連(t *testing.T) {
-	k, port, dest, stop := startIssue65Kernel(t, "hysteria")
-	defer stop()
-	assertIssue65UDPListening(t, "hy2", port, k)
-	if err := handshakeIssue65Hy2(t, port, dest); err != nil {
-		t.Fatalf("官方 #65：Hy2 Start 後正確憑證必須能 handshake／建連（不准只 process 活著）: %v", err)
+	for _, proto := range []string{"hysteria", "hysteria2", "hy2"} {
+		t.Run(proto, func(t *testing.T) {
+			k, port, dest, stop := startIssue65Kernel(t, proto)
+			defer stop()
+			assertIssue65UDPListening(t, "hy2/"+proto, port, k)
+			if err := handshakeIssue65Hy2(t, port, dest); err != nil {
+				t.Fatalf("官方 #65：Hy2(%s) Start 後正確憑證必須能 handshake／建連（不准只 process 活著）: %v", proto, err)
+			}
+		})
 	}
 }
 
@@ -94,7 +108,7 @@ func TestTUIC_正確憑證必須能handshake建連(t *testing.T) {
 }
 
 func TestVLESS正常不准當Hy2TUIC成功假象(t *testing.T) {
-	// vless 通了不算 hy2／tuic 修好。兩邊都要獨立聽、獨立建連。
+	// vless 通了不算 hy2／tuic 修好。hysteria2 別名與 tuic 都要獨立聽、獨立建連。
 	vlessK, vlessPort, vlessDest, vlessStop := startIssue65VLESS(t)
 	defer vlessStop()
 	if err := trySingBoxVLESS(t, vlessPort, issue65UserUUID, vlessDest); err != nil {
@@ -104,7 +118,7 @@ func TestVLESS正常不准當Hy2TUIC成功假象(t *testing.T) {
 		t.Fatal("對照組 VLESS kernel 必須在跑")
 	}
 
-	hy2K, hy2Port, hy2Dest, hy2Stop := startIssue65Kernel(t, "hysteria")
+	hy2K, hy2Port, hy2Dest, hy2Stop := startIssue65Kernel(t, "hysteria2")
 	defer hy2Stop()
 	tuicK, tuicPort, tuicDest, tuicStop := startIssue65Kernel(t, "tuic")
 	defer tuicStop()
@@ -112,13 +126,35 @@ func TestVLESS正常不准當Hy2TUIC成功假象(t *testing.T) {
 	if hy2Port == vlessPort || tuicPort == vlessPort {
 		t.Fatal("hy2／tuic 不得跟 vless 共用同一埠來假裝聽成功")
 	}
-	assertIssue65UDPListening(t, "hy2", hy2Port, hy2K)
+	assertIssue65UDPListening(t, "hy2/hysteria2", hy2Port, hy2K)
 	assertIssue65UDPListening(t, "tuic", tuicPort, tuicK)
 	if err := handshakeIssue65Hy2(t, hy2Port, hy2Dest); err != nil {
-		t.Fatalf("vless 通了不算數：Hy2 仍必須能 handshake／建連: %v", err)
+		t.Fatalf("vless 通了不算數：Hy2(hysteria2) 仍必須能 handshake／建連: %v", err)
 	}
 	if err := handshakeIssue65TUIC(t, tuicPort, tuicDest); err != nil {
 		t.Fatalf("vless 通了不算數：TUIC 仍必須能 handshake／建連: %v", err)
+	}
+}
+
+func TestBuildInbound_Hysteria2別名必須產出inbound(t *testing.T) {
+	// Start 成功但 inbounds 是空的 → process 活著、埠沒在聽。
+	for _, proto := range []string{"hysteria2", "hy2"} {
+		inbound := buildInbound(&model.NodeSpec{
+			Protocol:   proto,
+			ListenIP:   "127.0.0.1",
+			ServerPort: 443,
+			Version:    2,
+		}, issue65Users(), issue65TLSCert(t))
+		if inbound == nil {
+			t.Errorf("protocol %q 必須產出 inbound（不准 Start 成功卻沒聽埠）", proto)
+			continue
+		}
+		if got, _ := inbound["type"].(string); got != "hysteria2" {
+			t.Errorf("protocol %q inbound type=%q，要 hysteria2", proto, got)
+		}
+		if _, ok := inbound["listen_port"]; !ok {
+			t.Errorf("protocol %q inbound 必須有 listen_port", proto)
+		}
 	}
 }
 
@@ -139,6 +175,9 @@ func TestHy2TUIC_仍走production_inbound不准關協議(t *testing.T) {
 	}
 	if !bytes.Contains(configSrc, []byte(`case "hysteria"`)) || !bytes.Contains(configSrc, []byte(`case "tuic"`)) {
 		t.Fatal("關掉 Hy2／TUIC 當修：buildInbound 不再產出 hysteria／tuic")
+	}
+	if !bytes.Contains(configSrc, []byte(`case "hysteria2"`)) && !bytes.Contains(configSrc, []byte(`case "hy2"`)) {
+		t.Fatal("protocol hysteria2／hy2 沒進 buildInbound：Start 會成功但沒 inbound、埠沒在聽（官方 #65）")
 	}
 	if bytes.Contains(startSrc, []byte("kernel/xray")) || bytes.Contains(startSrc, []byte("xray.New")) {
 		t.Fatal("不准改切 xray 當修")
@@ -205,7 +244,7 @@ func startIssue65Kernel(t *testing.T, protocol string) (*SingBox, int, *net.TCPA
 func startIssue65VLESS(t *testing.T) (*SingBox, int, *net.TCPAddr, func()) {
 	t.Helper()
 	nlog.Init(io.Discard, slog.LevelError, false)
-	destLn, destAddr := startIssue65Dest(t)
+	destLn, destAddr := startSingBoxHotDest(t)
 	port := sbFreeTCPPort(t)
 	spec := &model.NodeSpec{
 		Protocol:   "vless",
@@ -237,7 +276,8 @@ func issue65PanelSpec(t *testing.T, protocol string, port int) *model.NodeSpec {
 		"listen_ip":   "127.0.0.1",
 		"kernel_type": "singbox",
 	}
-	if protocol == "hysteria" {
+	switch protocol {
+	case "hysteria", "hysteria2", "hy2":
 		payload["version"] = 2
 	}
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -271,7 +311,7 @@ func assertIssue65UDPListening(t *testing.T, label string, port int, k *SingBox)
 	if k != nil && !k.IsRunning() {
 		t.Fatalf("官方 #65：%s kernel 沒在跑；不准把起核失敗當聽成功", label)
 	}
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		if issue65UDPPortTaken(port) && issue65ProcUDPHasPort(port) {
 			t.Logf("%s UDP :%d 在聽（ss／ListenUDP 占用）", label, port)
