@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/jasonsamtago/Gboard-Node/internal/kernel/singbox/hotuser"
+	"github.com/jasonsamtago/Gboard-Node/internal/kernel/singbox/quicbind"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/inbound"
 	"github.com/sagernet/sing-box/common/listener"
@@ -40,6 +41,7 @@ type Inbound struct {
 	tlsConfig   tls.ServerConfig
 	service     *hysteria2.Service[string]
 	serviceOpts hysteria2.ServiceOptions
+	relay       *quicbind.Relay
 	packetConn  net.PacketConn
 	userCount   int
 	hop         Range
@@ -202,8 +204,8 @@ func (h *Inbound) Start(stage adapter.StartStage) error {
 	if err != nil {
 		return err
 	}
-	// quic.Listener.Close() 會順手關底下 UDP；熱換 Service 時埠必須留著。
-	h.packetConn = stickyPacketConn{PacketConn: packetConn}
+	h.relay = quicbind.NewRelay(packetConn)
+	h.packetConn = h.relay.Session()
 	return h.service.Start(h.packetConn)
 }
 
@@ -228,9 +230,10 @@ func (h *Inbound) listenPacket() (net.PacketConn, error) {
 
 func (h *Inbound) Close() error {
 	return common.Close(
+		common.PtrOrNil(h.service),
+		h.relay,
 		h.mux,
 		h.listener,
 		h.tlsConfig,
-		common.PtrOrNil(h.service),
 	)
 }

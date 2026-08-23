@@ -50,19 +50,21 @@ func (h *Inbound) publishUsers(ids []string, uuids [][16]byte, passwords []strin
 }
 
 // replaceService 先關舊 QUIC／auth 讀 map，再把名單寫進新 Service。
-// 不准跟進線 handshake 對打同一張 userMap；UDP 埠由 stickyPacketConn 留著。
+// 不准跟進線 handshake 對打同一張 userMap；UDP 埠由 quicbind.Relay 留著。
 func (h *Inbound) replaceService(ids []string, uuids [][16]byte, passwords []string) error {
 	svc, err := tuic.NewService[string](h.serverOpts)
 	if err != nil {
 		return err
 	}
 	svc.UpdateUsers(ids, uuids, passwords)
+	next := h.relay.Session()
 	if old := h.server; old != nil {
 		_ = old.Close()
 	}
-	if err := svc.Start(h.packetConn); err != nil {
+	if err := svc.Start(next); err != nil {
 		return err
 	}
+	h.packetConn = next
 	h.server = svc
 	return nil
 }

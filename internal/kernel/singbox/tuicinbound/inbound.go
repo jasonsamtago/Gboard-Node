@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jasonsamtago/Gboard-Node/internal/kernel/singbox/hotuser"
+	"github.com/jasonsamtago/Gboard-Node/internal/kernel/singbox/quicbind"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/inbound"
 	"github.com/sagernet/sing-box/common/listener"
@@ -34,6 +35,7 @@ type Inbound struct {
 	tlsConfig  tls.ServerConfig
 	server     *tuic.Service[string]
 	serverOpts tuic.ServiceOptions
+	relay      *quicbind.Relay
 	packetConn net.PacketConn
 	userCount  int
 }
@@ -145,14 +147,16 @@ func (h *Inbound) Start(stage adapter.StartStage) error {
 	if err != nil {
 		return err
 	}
-	h.packetConn = stickyPacketConn{PacketConn: packetConn}
+	h.relay = quicbind.NewRelay(packetConn)
+	h.packetConn = h.relay.Session()
 	return h.server.Start(h.packetConn)
 }
 
 func (h *Inbound) Close() error {
 	return common.Close(
+		common.PtrOrNil(h.server),
+		h.relay,
 		h.listener,
 		h.tlsConfig,
-		common.PtrOrNil(h.server),
 	)
 }
