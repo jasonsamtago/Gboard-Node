@@ -6,10 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
-	officialHy2 "github.com/sagernet/sing-box/protocol/hysteria2"
-	officialTuic "github.com/sagernet/sing-box/protocol/tuic"
 	"github.com/sagernet/sing/common/auth"
 )
 
@@ -18,24 +15,27 @@ import (
 //	users hot-swapped users=211
 //	users updated: +0 -1
 //	panic: runtime error: index out of range [211] with length 211
-//	hysteria2.(*Inbound).NewConnectionEx  ← inbound.go:159
+//	hysteria2.(*Inbound).NewConnectionEx
 //
-// 官方 inbound 把陣列下標當作用戶 id（Service[int] + userNameList[userID]）。
-// 熱刪最後一人後，舊 session／舊 password 仍帶 index==新長度（=舊最後下標），
-// 或 index==舊長度，直接 OOR 把進程打掛。
+// 官方 stock inbound 用陣列下標當作用戶 id；熱刪變短後舊 session／舊 password
+// 的 leftover index（含 index==舊長度／新長度）OOR 把進程打掛。
 //
-// #54 已在 hy2inbound／tuicinbound 鎖 StableID／熱更新錯位；那份測試走的是
-// 已覆寫 inbound，現況已綠。本檔單獨鎖「刪用戶變短不得掛」回歸，故意走
-// **未走 StableID** 的官方 protocol/hysteria2、protocol/tuic inbound
-// （與 #54 第一版失敗測試同一條 index 路徑），讓當前 `dev` 先紅。
+// 本檔鎖 Gboard-Node **production 路徑**：hy2inbound／tuicinbound + UpdateUsers
+// ＋ StableID（與 #54 同一套 inbound，見 newTestHysteria2Inbound）。
+// 不准測已被覆寫的 stock protocol/hysteria2／protocol/tuic——那條永遠紅、
+// 鎖不到上線行為。
+//
+// #54 已鎖 StableID／熱更新錯位，現況 hy2inbound 對 leftover int 不 panic。
+// 本票單獨鎖「刪用戶變短不得掛」回歸：+0 -N 後 NewConnectionEx／既有連線
+// 不得 index out of range，其餘用戶續活，必須走 UpdateUsers。
+// 當前 tip（含 #54）預期綠——這是回歸鎖，不是再逼紅。
 //
 // 審核鎖：
-//  1. 熱更新 users 變短（+0 -N，至少刪一人）後，既有／新連線不得 panic
-//     `index out of range`（含官方形狀 index==舊長度／新長度）。
-//  2. inbound 必須續活：UpdateUsers 後仍可服務其餘用戶。
-//  3. 不准假修：關掉 UpdateUsers／熱更新、關掉 Hy2／TUIC、改成必須重啟才刪用戶。
-//  4. 與 #54 分開：測試名／斷言對準 #49 OOR panic，不重做流量錯位鎖。
-//  5. Hy2 為主；TUIC 同一套 user index 路徑一併鎖。
+//  1. 熱更新 users 變短（+0 -N）後不得 panic index out of range。
+//  2. inbound 續活，其餘用戶仍可服務（StableID／uuid）。
+//  3. 不准關掉 UpdateUsers／熱更新、關掉 Hy2／TUIC、改成必須重啟才刪用戶。
+//  4. 與 #54 分開：測試名對準 #49 刪用戶不掛。
+//  5. Hy2 為主；TUIC 同一套路徑一併鎖。
 
 const (
 	// 4 人縮成 3 人（+0 -1），等價官方 212→211。
@@ -44,86 +44,120 @@ const (
 	issue49LastIndex = 3
 )
 
-func TestHysteria2DeleteLastUser_OfficialIndexEqualNewLengthDoesNotPanic(t *testing.T) {
-	// 官方形狀：刪掉最後一人後 leftover index == 新長度（=舊最後下標）。
-	in, router := newOfficialHy2Inbound(t, issue49FourUsers())
+func TestHysteria2DeleteLastUser_StaleIndexEqualNewLengthDoesNotPanic(t *testing.T) {
+	in, router := newTestHysteria2Inbound(t, issue49FourUsers())
 	if err := in.UpdateUsers(issue49Hy2WithoutLast()); err != nil {
 		t.Fatalf("UpdateUsers +0 -1（刪最後一人）: %v", err)
 	}
-	assertIssue49NoOOR(t, "hy2 tcp index==新長度", func() {
-		_ = routeHy2Conn(t, in, router, auth.ContextWithUser(context.Background(), issue49LastIndex))
+	assertIssue49NoOOR(t, "hy2 tcp leftover index==新長度", func() {
+		got := routeHy2Conn(t, in, router, auth.ContextWithUser(context.Background(), issue49LastIndex))
+		assertIssue49StaleIndexNotRebound(t, got, "hy2 tcp")
 	})
-	assertIssue49NoOOR(t, "hy2 udp index==新長度", func() {
-		_ = routeHy2Packet(t, in, router, auth.ContextWithUser(context.Background(), issue49LastIndex))
+	assertIssue49NoOOR(t, "hy2 udp leftover index==新長度", func() {
+		got := routeHy2Packet(t, in, router, auth.ContextWithUser(context.Background(), issue49LastIndex))
+		assertIssue49StaleIndexNotRebound(t, got, "hy2 udp")
 	})
 	assertIssue49RemainingHy2(t, in, router)
 }
 
-func TestHysteria2DeleteLastUser_OfficialIndexEqualOldLengthDoesNotPanic(t *testing.T) {
-	// 審核 1：含官方形狀 index==舊長度（userNameList[len]）。
-	in, router := newOfficialHy2Inbound(t, issue49FourUsers())
+func TestHysteria2DeleteLastUser_StaleIndexEqualOldLengthDoesNotPanic(t *testing.T) {
+	in, router := newTestHysteria2Inbound(t, issue49FourUsers())
 	if err := in.UpdateUsers(issue49Hy2WithoutLast()); err != nil {
 		t.Fatalf("UpdateUsers +0 -1（刪最後一人）: %v", err)
 	}
-	assertIssue49NoOOR(t, "hy2 tcp index==舊長度", func() {
-		_ = routeHy2Conn(t, in, router, auth.ContextWithUser(context.Background(), issue49OldLen))
+	assertIssue49NoOOR(t, "hy2 tcp leftover index==舊長度", func() {
+		got := routeHy2Conn(t, in, router, auth.ContextWithUser(context.Background(), issue49OldLen))
+		assertIssue49StaleIndexNotRebound(t, got, "hy2 tcp")
 	})
-	assertIssue49NoOOR(t, "hy2 udp index==舊長度", func() {
-		_ = routeHy2Packet(t, in, router, auth.ContextWithUser(context.Background(), issue49OldLen))
+	assertIssue49NoOOR(t, "hy2 udp leftover index==舊長度", func() {
+		got := routeHy2Packet(t, in, router, auth.ContextWithUser(context.Background(), issue49OldLen))
+		assertIssue49StaleIndexNotRebound(t, got, "hy2 udp")
 	})
 	assertIssue49RemainingHy2(t, in, router)
+}
+
+func TestHysteria2DeleteLastUser_ExistingUUIDConnDoesNotPanic(t *testing.T) {
+	in, router := newTestHysteria2Inbound(t, issue49FourUsers())
+	carolCtx := auth.ContextWithUser(context.Background(), hy2TuicUserCarol)
+	aliceCtx := auth.ContextWithUser(context.Background(), hy2TuicUserAlice)
+
+	if got := routeHy2Conn(t, in, router, carolCtx); got != hy2TuicUserCarol {
+		t.Fatalf("前置：Carol StableID 必須能連: got %q", got)
+	}
+
+	if err := in.UpdateUsers(issue49Hy2WithoutLast()); err != nil {
+		t.Fatalf("UpdateUsers +0 -1: %v", err)
+	}
+
+	assertIssue49NoOOR(t, "hy2 既有 Carol 連線", func() {
+		if got := routeHy2Conn(t, in, router, carolCtx); got != hy2TuicUserCarol {
+			t.Fatalf("刪 Alice 後 Carol 必須續活: got %q", got)
+		}
+	})
+	assertIssue49NoOOR(t, "hy2 已刪 Alice 的舊 session", func() {
+		got := routeHy2Conn(t, in, router, aliceCtx)
+		if got != "" && got != hy2TuicUserAlice {
+			t.Fatalf("已刪用戶舊 session 不得掛到別人頭上: got %q", got)
+		}
+	})
 }
 
 func TestHysteria2DeleteMiddleUser_StaleLastIndexDoesNotPanic(t *testing.T) {
-	in, router := newOfficialHy2Inbound(t, issue49FourUsers())
+	in, router := newTestHysteria2Inbound(t, issue49FourUsers())
 	if err := in.UpdateUsers(issue49Hy2WithoutMiddle()); err != nil {
 		t.Fatalf("UpdateUsers +0 -1（刪中間一人）: %v", err)
 	}
 	assertIssue49NoOOR(t, "hy2 刪中間後舊最後下標", func() {
-		_ = routeHy2Conn(t, in, router, auth.ContextWithUser(context.Background(), issue49LastIndex))
+		got := routeHy2Conn(t, in, router, auth.ContextWithUser(context.Background(), issue49LastIndex))
+		assertIssue49StaleIndexNotRebound(t, got, "hy2 刪中間")
 	})
 	assertIssue49NoOOR(t, "hy2 刪中間後 index==舊長度", func() {
 		_ = routeHy2Conn(t, in, router, auth.ContextWithUser(context.Background(), issue49OldLen))
 	})
-	got := routeHy2Conn(t, in, router, auth.ContextWithUser(context.Background(), 0))
-	if got != hy2TuicUserCarol {
-		t.Fatalf("刪中間後其餘用戶必須仍可服務：slot0=%q, want Carol", got)
+	if got := routeHy2Conn(t, in, router, auth.ContextWithUser(context.Background(), hy2TuicUserCarol)); got != hy2TuicUserCarol {
+		t.Fatalf("刪中間後 Carol 必須續活: got %q", got)
+	}
+	if got := routeHy2Conn(t, in, router, auth.ContextWithUser(context.Background(), hy2TuicUserAlice)); got != hy2TuicUserAlice {
+		t.Fatalf("刪中間後 Alice 必須續活: got %q", got)
 	}
 }
 
-func TestTUICDeleteLastUser_OfficialIndexEqualNewLengthDoesNotPanic(t *testing.T) {
-	in, router := newOfficialTUICInbound(t, issue49FourTUICUsers())
+func TestTUICDeleteLastUser_StaleIndexEqualNewLengthDoesNotPanic(t *testing.T) {
+	in, router := newTestTUICInbound(t, issue49FourTUICUsers())
 	if err := in.UpdateUsers(issue49TUICWithoutLast()); err != nil {
 		t.Fatalf("UpdateUsers +0 -1（刪最後一人）: %v", err)
 	}
-	assertIssue49NoOOR(t, "tuic tcp index==新長度", func() {
-		_ = routeTUICConn(t, in, router, auth.ContextWithUser(context.Background(), issue49LastIndex))
+	assertIssue49NoOOR(t, "tuic tcp leftover index==新長度", func() {
+		got := routeTUICConn(t, in, router, auth.ContextWithUser(context.Background(), issue49LastIndex))
+		assertIssue49StaleIndexNotRebound(t, got, "tuic tcp")
 	})
-	assertIssue49NoOOR(t, "tuic udp index==新長度", func() {
-		_ = routeTUICPacket(t, in, router, auth.ContextWithUser(context.Background(), issue49LastIndex))
+	assertIssue49NoOOR(t, "tuic udp leftover index==新長度", func() {
+		got := routeTUICPacket(t, in, router, auth.ContextWithUser(context.Background(), issue49LastIndex))
+		assertIssue49StaleIndexNotRebound(t, got, "tuic udp")
 	})
 	assertIssue49RemainingTUIC(t, in, router)
 }
 
-func TestTUICDeleteLastUser_OfficialIndexEqualOldLengthDoesNotPanic(t *testing.T) {
-	in, router := newOfficialTUICInbound(t, issue49FourTUICUsers())
+func TestTUICDeleteLastUser_StaleIndexEqualOldLengthDoesNotPanic(t *testing.T) {
+	in, router := newTestTUICInbound(t, issue49FourTUICUsers())
 	if err := in.UpdateUsers(issue49TUICWithoutLast()); err != nil {
 		t.Fatalf("UpdateUsers +0 -1（刪最後一人）: %v", err)
 	}
-	assertIssue49NoOOR(t, "tuic tcp index==舊長度", func() {
-		_ = routeTUICConn(t, in, router, auth.ContextWithUser(context.Background(), issue49OldLen))
+	assertIssue49NoOOR(t, "tuic tcp leftover index==舊長度", func() {
+		got := routeTUICConn(t, in, router, auth.ContextWithUser(context.Background(), issue49OldLen))
+		assertIssue49StaleIndexNotRebound(t, got, "tuic tcp")
 	})
-	assertIssue49NoOOR(t, "tuic udp index==舊長度", func() {
-		_ = routeTUICPacket(t, in, router, auth.ContextWithUser(context.Background(), issue49OldLen))
+	assertIssue49NoOOR(t, "tuic udp leftover index==舊長度", func() {
+		got := routeTUICPacket(t, in, router, auth.ContextWithUser(context.Background(), issue49OldLen))
+		assertIssue49StaleIndexNotRebound(t, got, "tuic udp")
 	})
 	assertIssue49RemainingTUIC(t, in, router)
 }
 
 func TestHy2TUICDeleteUser_InboundStaysAliveAfterPlusZeroMinusOne(t *testing.T) {
-	// 審核 2／3：UpdateUsers 後 inbound 續活，仍可再熱更新、服務其餘用戶。
-	// 不准重啟 inbound、不准關掉 Hy2／TUIC／UpdateUsers。
-	hy2In, hy2R := newOfficialHy2Inbound(t, issue49FourUsers())
-	tuicIn, tuicR := newOfficialTUICInbound(t, issue49FourTUICUsers())
+	// 必須走 UpdateUsers 熱刪，不准重啟 inbound、不准關掉 Hy2／TUIC。
+	hy2In, hy2R := newTestHysteria2Inbound(t, issue49FourUsers())
+	tuicIn, tuicR := newTestTUICInbound(t, issue49FourTUICUsers())
 
 	if err := hy2In.UpdateUsers(issue49Hy2WithoutLast()); err != nil {
 		t.Fatalf("hy2 UpdateUsers: %v", err)
@@ -132,10 +166,10 @@ func TestHy2TUICDeleteUser_InboundStaysAliveAfterPlusZeroMinusOne(t *testing.T) 
 		t.Fatalf("tuic UpdateUsers: %v", err)
 	}
 
-	assertIssue49NoOOR(t, "hy2 續活舊下標", func() {
+	assertIssue49NoOOR(t, "hy2 續活 leftover index", func() {
 		_ = routeHy2Conn(t, hy2In, hy2R, auth.ContextWithUser(context.Background(), issue49LastIndex))
 	})
-	assertIssue49NoOOR(t, "tuic 續活舊下標", func() {
+	assertIssue49NoOOR(t, "tuic 續活 leftover index", func() {
 		_ = routeTUICConn(t, tuicIn, tuicR, auth.ContextWithUser(context.Background(), issue49LastIndex))
 	})
 
@@ -149,19 +183,19 @@ func TestHy2TUICDeleteUser_InboundStaysAliveAfterPlusZeroMinusOne(t *testing.T) 
 	assertIssue49RemainingTUIC(t, tuicIn, tuicR)
 }
 
-func TestHy2DeleteUser_OfficialOORLogEvidence(t *testing.T) {
+func TestHy2DeleteUser_UpdateUsersNoPanicLogEvidence(t *testing.T) {
 	var lines []string
 	logf := func(format string, args ...any) {
 		lines = append(lines, fmt.Sprintf(format, args...))
 	}
 
-	in, router := newOfficialHy2Inbound(t, issue49FourUsers())
-	logf("before hy2 users=%d path=UpdateUsers restart=false", issue49OldLen)
+	in, router := newTestHysteria2Inbound(t, issue49FourUsers())
+	logf("before hy2 users=%d path=UpdateUsers inbound=hy2inbound restart=false", issue49OldLen)
 
 	if err := in.UpdateUsers(issue49Hy2WithoutLast()); err != nil {
 		t.Fatalf("UpdateUsers: %v", err)
 	}
-	logf("update hy2 users updated: +0 -1 from=%d to=%d removed=%s restart=false", issue49OldLen, issue49OldLen-1, hy2TuicUserAlice)
+	logf("update hy2 users updated: +0 -1 from=%d to=%d removed=%s path=UpdateUsers restart=false", issue49OldLen, issue49OldLen-1, hy2TuicUserAlice)
 
 	panicked := ""
 	func() {
@@ -174,16 +208,16 @@ func TestHy2DeleteUser_OfficialOORLogEvidence(t *testing.T) {
 	}()
 	logf("after hy2 NewConnectionEx stale_index=%d panic=%q", issue49LastIndex, panicked)
 
-	remain := routeHy2Conn(t, in, router, auth.ContextWithUser(context.Background(), 0))
-	logf("after hy2 remaining slot0 user=%s inbound_alive=true", remain)
+	remain := routeHy2Conn(t, in, router, auth.ContextWithUser(context.Background(), hy2TuicUserCarol))
+	logf("after hy2 remaining carol_uuid user=%s inbound_alive=true path=UpdateUsers", remain)
 
 	logText := strings.Join(lines, "\n")
 	t.Log("\n" + logText)
 	if panicked != "" {
-		t.Fatalf("官方 #49：users updated +0 -1 後 NewConnectionEx 不得 panic index out of range（含 [3] with length 3／[211] with length 211）: %s\n%s", panicked, logText)
+		t.Fatalf("官方 #49：hy2inbound UpdateUsers +0 -1 後 NewConnectionEx 不得 panic index out of range: %s\n%s", panicked, logText)
 	}
 	if remain != hy2TuicUserCarol {
-		t.Fatalf("其餘用戶必須仍可服務：slot0=%q\n%s", remain, logText)
+		t.Fatalf("其餘用戶必須仍可服務（StableID）：carol=%q\n%s", remain, logText)
 	}
 }
 
@@ -233,84 +267,35 @@ func assertIssue49NoOOR(t *testing.T, label string, fn func()) {
 	t.Helper()
 	defer func() {
 		if rec := recover(); rec != nil {
-			t.Fatalf("官方 #49 %s 不得 panic index out of range（官方 hysteria2 NewConnectionEx inbound.go:159）: %v", label, rec)
+			t.Fatalf("官方 #49 %s：hy2inbound／tuicinbound 刪用戶變短不得 panic index out of range: %v", label, rec)
 		}
 	}()
 	fn()
 }
 
+func assertIssue49StaleIndexNotRebound(t *testing.T, got, label string) {
+	t.Helper()
+	if got != "" && got != hy2TuicUserAlice {
+		t.Fatalf("%s leftover int index 不得掛到別人頭上: got %q", label, got)
+	}
+}
+
 func assertIssue49RemainingHy2(t *testing.T, in hy2Inbound, router *captureRouter) {
 	t.Helper()
-	got := routeHy2Conn(t, in, router, auth.ContextWithUser(context.Background(), 0))
-	if got != hy2TuicUserCarol {
-		t.Fatalf("Hy2 刪用戶後其餘用戶必須仍可服務：slot0=%q, want Carol（不准關掉 Hy2／UpdateUsers）", got)
+	if got := routeHy2Conn(t, in, router, auth.ContextWithUser(context.Background(), hy2TuicUserCarol)); got != hy2TuicUserCarol {
+		t.Fatalf("Hy2 刪用戶後其餘用戶必須續活（StableID）：carol=%q（不准關掉 Hy2／UpdateUsers）", got)
 	}
-	got = routeHy2Conn(t, in, router, auth.ContextWithUser(context.Background(), 2))
-	if got != hy2TuicUserEve {
-		t.Fatalf("Hy2 刪用戶後其餘用戶必須仍可服務：slot2=%q, want Eve", got)
+	if got := routeHy2Conn(t, in, router, auth.ContextWithUser(context.Background(), hy2TuicUserEve)); got != hy2TuicUserEve {
+		t.Fatalf("Hy2 刪用戶後其餘用戶必須續活（StableID）：eve=%q", got)
 	}
 }
 
 func assertIssue49RemainingTUIC(t *testing.T, in tuicInbound, router *captureRouter) {
 	t.Helper()
-	got := routeTUICConn(t, in, router, auth.ContextWithUser(context.Background(), 0))
-	if got != hy2TuicUserCarol {
-		t.Fatalf("TUIC 刪用戶後其餘用戶必須仍可服務：slot0=%q, want Carol（不准關掉 TUIC／UpdateUsers）", got)
+	if got := routeTUICConn(t, in, router, auth.ContextWithUser(context.Background(), hy2TuicUserCarol)); got != hy2TuicUserCarol {
+		t.Fatalf("TUIC 刪用戶後其餘用戶必須續活（StableID）：carol=%q（不准關掉 TUIC／UpdateUsers）", got)
 	}
-	got = routeTUICConn(t, in, router, auth.ContextWithUser(context.Background(), 2))
-	if got != hy2TuicUserEve {
-		t.Fatalf("TUIC 刪用戶後其餘用戶必須仍可服務：slot2=%q, want Eve", got)
+	if got := routeTUICConn(t, in, router, auth.ContextWithUser(context.Background(), hy2TuicUserEve)); got != hy2TuicUserEve {
+		t.Fatalf("TUIC 刪用戶後其餘用戶必須續活（StableID）：eve=%q", got)
 	}
-}
-
-func newOfficialHy2Inbound(t *testing.T, users []option.Hysteria2User) (hy2Inbound, *captureRouter) {
-	t.Helper()
-	if len(users) != issue49OldLen {
-		t.Fatalf("官方 #49 repro 先載入 %d 人，got %d", issue49OldLen, len(users))
-	}
-	router := &captureRouter{}
-	raw, err := officialHy2.NewInbound(context.Background(), router, log.NewNOPFactory().Logger(), "hy2-issue49", option.Hysteria2InboundOptions{
-		ListenOptions: option.ListenOptions{
-			Listen:     hy2TuicListenAddr(),
-			ListenPort: 18543,
-		},
-		Users: users,
-		InboundTLSOptionsContainer: option.InboundTLSOptionsContainer{
-			TLS: hy2TuicTestTLS(t),
-		},
-	})
-	if err != nil {
-		t.Fatalf("official hysteria2.NewInbound: %v", err)
-	}
-	in, ok := raw.(hy2Inbound)
-	if !ok {
-		t.Fatalf("official hysteria2 inbound missing UpdateUsers／NewConnectionEx（不准關掉 Hy2）")
-	}
-	return in, router
-}
-
-func newOfficialTUICInbound(t *testing.T, users []option.TUICUser) (tuicInbound, *captureRouter) {
-	t.Helper()
-	if len(users) != issue49OldLen {
-		t.Fatalf("官方 #49 repro 先載入 %d 人，got %d", issue49OldLen, len(users))
-	}
-	router := &captureRouter{}
-	raw, err := officialTuic.NewInbound(context.Background(), router, log.NewNOPFactory().Logger(), "tuic-issue49", option.TUICInboundOptions{
-		ListenOptions: option.ListenOptions{
-			Listen:     hy2TuicListenAddr(),
-			ListenPort: 18544,
-		},
-		Users: users,
-		InboundTLSOptionsContainer: option.InboundTLSOptionsContainer{
-			TLS: hy2TuicTestTLS(t),
-		},
-	})
-	if err != nil {
-		t.Fatalf("official tuic.NewInbound: %v", err)
-	}
-	in, ok := raw.(tuicInbound)
-	if !ok {
-		t.Fatalf("official tuic inbound missing UpdateUsers／NewConnectionEx（不准關掉 TUIC）")
-	}
-	return in, router
 }
