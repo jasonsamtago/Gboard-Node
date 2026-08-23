@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math/rand"
 	"net/http"
-	"net/url"
 	"strconv"
 	"sync/atomic"
 	"time"
@@ -198,7 +197,7 @@ func (w *WSClient) Run(ctx context.Context) {
 }
 
 func (w *WSClient) connect(ctx context.Context) error {
-	u, err := url.Parse(w.wsURL)
+	u, err := parseWSURL(w.wsURL)
 	if err != nil {
 		return fmt.Errorf("parse ws url: %w", err)
 	}
