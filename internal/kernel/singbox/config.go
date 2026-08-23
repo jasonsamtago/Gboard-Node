@@ -1246,10 +1246,12 @@ func applyMultiplex(base M, nc *model.NodeSpec) {
 }
 
 func applyProxyProtocol(base M, nc *model.NodeSpec) {
-	// if !nc.GetProxyProtocol() {
-	// 	return
-	// }
-	// base["proxy_protocol"] = true
+	if nc == nil || !nc.GetProxyProtocol() {
+		return
+	}
+	// sing-box JSON 欄位；1.6 起核心會拒聽，Start 前會剝掉並改由
+	// proxyProtocolProxy 在 listen 層收 PROXY header。
+	base["proxy_protocol"] = true
 }
 
 // extractECHInbound extracts ECH config for sing-box server (inbound).
