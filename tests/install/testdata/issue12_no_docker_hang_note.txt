@@ -1,0 +1,24 @@
+# 官方 cedar2025/Xboard-Node #12 — install.sh 無 docker 不得卡死
+# 指令：
+#   bash tests/install/no_docker_hang_test.sh
+#   go test ./tests/install -count=1 -timeout 30s
+# 基底：dev tip b8412cb（含 #13 回歸鎖）
+# 日期：2026-08-24
+#
+# 以碼為準（不是修補）：
+# - 現 tip install.sh 是原生 binary＋systemd，全文沒有 docker 字樣
+# - read -p 只在 uninstall 確認；run_with_retry／wait_for_health 都有上限
+# - 官方 cedar 現版 install.sh 同樣無 docker
+#
+# 因此本輪測在當前 tip 上是綠（見 issue12_no_docker_hang_test.txt／
+# issue12_no_docker_hang_go_test.txt）。官方「沒裝 docker 會卡死」
+# 更像舊版安裝器或 README 的 Docker／Compose 部署路徑，不是現 tip
+# 預設原生安裝隱式呼叫 docker。
+#
+# 鎖定：
+# - Happy：PATH 無 docker，bash -n／help／source 預檢不掛起、不呼叫 docker
+# - 邊界：PATH 有 sleep infinity 的 docker stub，預設預檢仍不呼叫
+# - 失敗：若未來出現 ensure／require／check_docker，缺失必須 ≤5s 非 0
+#   並印 docker；契約夾具驗證快速失敗，反例 FIFO read 會被 timeout 抓紅
+#
+# 不准改 production；不准強制安裝 docker；#18 本機安裝產品化不在本票。

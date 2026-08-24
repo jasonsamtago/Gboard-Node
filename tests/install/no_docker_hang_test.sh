@@ -352,14 +352,17 @@ EOF
         fi
     fi
 
-    # 反例夾具：read 等待 docker 必須被逾時抓到（證明測能打出紅）
+    # 反例夾具：沒 docker 就 read 空等。非 TTY 的 stdin 會立刻 EOF，
+    # 所以用沒有 writer 的 FIFO，才是「卡死」而不是秒退。
     local hang="$work/hang_on_missing_docker.sh"
     cat >"$hang" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 if ! command -v docker >/dev/null 2>&1; then
-    # 禁止的卡死：沒有 docker 就 read 空等
-    read -r -p "Install docker now? [y/N]: " answer
+    fifo="$(mktemp -u)"
+    mkfifo "$fifo"
+    # 禁止的卡死：沒有 docker 就 read 等輸入，永遠沒人寫
+    read -r -p "Install docker now? [y/N]: " answer <"$fifo"
 fi
 EOF
     chmod +x "$hang"
