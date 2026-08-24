@@ -1,0 +1,34 @@
+# 官方 cedar2025/Xboard-Node #41 — 本輪 TDD 紅（不改 production）
+# 指令：go test ./internal/kernel/singbox/ -count=1 -timeout 90s -run 'Issue41'
+# 基底：dev tip b8412cb（已含 #30）
+# 日期：2026-08-24
+#
+# 現況：buildShadowsocks 見 plugin 就
+#   WARN [core] sing-box shadowsocks inbound does not support plugin, ignoring plugin=...
+# inbound JSON 不帶 plugin／plugin_opts，客戶端 WS 握手被當成 SS ciphertext reset。
+#
+# 預期：v2ray／gost Happy 紅；無 plugin 普通 SS 綠（回歸）；未知 plugin 紅。
+
+--- PASS: TestIssue41_PlainSS_NoPlugin_MustStillHandshake
+
+--- FAIL: TestIssue41_V2RayPlugin_MustKeepAndHandshake
+    sing-box SS inbound 必須保留 plugin=v2ray-plugin（或等價字段含 path=/v2ray／host），不得丟棄
+    inbound JSON 只有 type=shadowsocks／method／users，無 plugin
+    官方 #41：不得再出現 "sing-box shadowsocks inbound does not support plugin, ignoring" plugin=v2ray-plugin
+        WARN [core] sing-box shadowsocks inbound does not support plugin, ignoring plugin=v2ray-plugin
+    官方 #41：v2ray-plugin 必須完成插件握手／連線（WS upgrade＋SS AEAD 回聲）
+        插件 WS 握手失敗: read: connection reset by peer
+        inbound/shadowsocks: cipher: message authentication failed
+
+--- FAIL: TestIssue41_GostPlugin_MustKeepAndHandshake
+    同上，plugin=gost-plugin／path=/gost
+        WARN [core] sing-box shadowsocks inbound does not support plugin, ignoring plugin=gost-plugin
+        插件 WS 握手失敗: read: connection reset by peer
+
+--- FAIL: TestIssue41_UnknownPlugin_MustErrorNotIgnore
+    未知 plugin 必須明確錯誤，不得官方 #41 式靜默 ignoring
+        WARN [core] sing-box shadowsocks inbound does not support plugin, ignoring plugin=obfs-local-unknown
+    未知／不支援的 plugin 起核必須回明確錯誤，不得當成功
+    拒絕未知 plugin 後核不得當成功在跑
+
+FAIL	github.com/jasonsamtago/Gboard-Node/internal/kernel/singbox
