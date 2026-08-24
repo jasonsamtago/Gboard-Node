@@ -1,0 +1,100 @@
+=== RUN   TestWSClient_HandshakeURLHostPathPortMustDialAndUpgrade
+=== RUN   TestWSClient_HandshakeURLHostPathPortMustDialAndUpgrade/path/ws
+=== RUN   TestWSClient_HandshakeURLHostPathPortMustDialAndUpgrade/path/ws/ws_scheme
+=== RUN   TestWSClient_HandshakeURLHostPathPortMustDialAndUpgrade/path/ws/http_scheme
+=== RUN   TestWSClient_HandshakeURLHostPathPortMustDialAndUpgrade/path/custom
+=== RUN   TestWSClient_HandshakeURLHostPathPortMustDialAndUpgrade/path/custom/ws_scheme
+=== RUN   TestWSClient_HandshakeURLHostPathPortMustDialAndUpgrade/path/custom/http_scheme
+--- PASS: TestWSClient_HandshakeURLHostPathPortMustDialAndUpgrade (0.08s)
+    --- PASS: TestWSClient_HandshakeURLHostPathPortMustDialAndUpgrade/path/ws (0.04s)
+        --- PASS: TestWSClient_HandshakeURLHostPathPortMustDialAndUpgrade/path/ws/ws_scheme (0.02s)
+        --- PASS: TestWSClient_HandshakeURLHostPathPortMustDialAndUpgrade/path/ws/http_scheme (0.02s)
+    --- PASS: TestWSClient_HandshakeURLHostPathPortMustDialAndUpgrade/path/custom (0.04s)
+        --- PASS: TestWSClient_HandshakeURLHostPathPortMustDialAndUpgrade/path/custom/ws_scheme (0.02s)
+        --- PASS: TestWSClient_HandshakeURLHostPathPortMustDialAndUpgrade/path/custom/http_scheme (0.02s)
+=== RUN   TestWSClient_HandshakeURLNon8076PortMustDialThatPort
+--- PASS: TestWSClient_HandshakeURLNon8076PortMustDialThatPort (0.02s)
+=== RUN   TestWSClient_MachineMuxHandshakeURLMustKeepPath
+--- PASS: TestWSClient_MachineMuxHandshakeURLMustKeepPath (0.02s)
+=== RUN   TestParseWSURL_MustNotRewriteHandshakeTo8076
+=== RUN   TestParseWSURL_MustNotRewriteHandshakeTo8076/ws://panel.example.com/ws
+=== RUN   TestParseWSURL_MustNotRewriteHandshakeTo8076/wss://panel.example.com/custom
+=== RUN   TestParseWSURL_MustNotRewriteHandshakeTo8076/ws://panel.example.com:9443/ws
+=== RUN   TestParseWSURL_MustNotRewriteHandshakeTo8076/http://panel.example.com/ws
+=== RUN   TestParseWSURL_MustNotRewriteHandshakeTo8076/https://ws.example.com:8443/custom
+--- PASS: TestParseWSURL_MustNotRewriteHandshakeTo8076 (0.00s)
+    --- PASS: TestParseWSURL_MustNotRewriteHandshakeTo8076/ws://panel.example.com/ws (0.00s)
+    --- PASS: TestParseWSURL_MustNotRewriteHandshakeTo8076/wss://panel.example.com/custom (0.00s)
+    --- PASS: TestParseWSURL_MustNotRewriteHandshakeTo8076/ws://panel.example.com:9443/ws (0.00s)
+    --- PASS: TestParseWSURL_MustNotRewriteHandshakeTo8076/http://panel.example.com/ws (0.00s)
+    --- PASS: TestParseWSURL_MustNotRewriteHandshakeTo8076/https://ws.example.com:8443/custom (0.00s)
+=== RUN   TestWSClient_WrongPathMustSurfaceOfficialEOF
+--- PASS: TestWSClient_WrongPathMustSurfaceOfficialEOF (0.00s)
+PASS
+ok  	github.com/jasonsamtago/Gboard-Node/internal/panel	0.127s
+=== RUN   TestPanelControlPlane_InitialHandshakeURLMustDialHostPathPort
+=== RUN   TestPanelControlPlane_InitialHandshakeURLMustDialHostPathPort/initial/ws_path_ws
+=== RUN   TestPanelControlPlane_InitialHandshakeURLMustDialHostPathPort/initial/http_path_ws
+=== RUN   TestPanelControlPlane_InitialHandshakeURLMustDialHostPathPort/initial/ws_custom_path
+=== RUN   TestPanelControlPlane_InitialHandshakeURLMustDialHostPathPort/initial/http_custom_path
+=== RUN   TestPanelControlPlane_InitialHandshakeURLMustDialHostPathPort/initial/missing_scheme_host_path
+=== RUN   TestPanelControlPlane_InitialHandshakeURLMustDialHostPathPort/initial/protocol_relative_ws
+--- PASS: TestPanelControlPlane_InitialHandshakeURLMustDialHostPathPort (0.13s)
+    --- PASS: TestPanelControlPlane_InitialHandshakeURLMustDialHostPathPort/initial/ws_path_ws (0.02s)
+    --- PASS: TestPanelControlPlane_InitialHandshakeURLMustDialHostPathPort/initial/http_path_ws (0.02s)
+    --- PASS: TestPanelControlPlane_InitialHandshakeURLMustDialHostPathPort/initial/ws_custom_path (0.02s)
+    --- PASS: TestPanelControlPlane_InitialHandshakeURLMustDialHostPathPort/initial/http_custom_path (0.02s)
+    --- PASS: TestPanelControlPlane_InitialHandshakeURLMustDialHostPathPort/initial/missing_scheme_host_path (0.02s)
+    --- PASS: TestPanelControlPlane_InitialHandshakeURLMustDialHostPathPort/initial/protocol_relative_ws (0.02s)
+=== RUN   TestPanelControlPlane_DiscoverHandshakeURLMustDialHostPathPort
+=== RUN   TestPanelControlPlane_DiscoverHandshakeURLMustDialHostPathPort/discover/ws_path_ws
+=== RUN   TestPanelControlPlane_DiscoverHandshakeURLMustDialHostPathPort/discover/http_path_ws
+=== RUN   TestPanelControlPlane_DiscoverHandshakeURLMustDialHostPathPort/discover/ws_custom_path
+=== RUN   TestPanelControlPlane_DiscoverHandshakeURLMustDialHostPathPort/discover/http_custom_path
+=== RUN   TestPanelControlPlane_DiscoverHandshakeURLMustDialHostPathPort/discover/missing_scheme_host_path
+=== RUN   TestPanelControlPlane_DiscoverHandshakeURLMustDialHostPathPort/discover/protocol_relative_ws
+--- PASS: TestPanelControlPlane_DiscoverHandshakeURLMustDialHostPathPort (0.13s)
+    --- PASS: TestPanelControlPlane_DiscoverHandshakeURLMustDialHostPathPort/discover/ws_path_ws (0.02s)
+    --- PASS: TestPanelControlPlane_DiscoverHandshakeURLMustDialHostPathPort/discover/http_path_ws (0.02s)
+    --- PASS: TestPanelControlPlane_DiscoverHandshakeURLMustDialHostPathPort/discover/ws_custom_path (0.02s)
+    --- PASS: TestPanelControlPlane_DiscoverHandshakeURLMustDialHostPathPort/discover/http_custom_path (0.02s)
+    --- PASS: TestPanelControlPlane_DiscoverHandshakeURLMustDialHostPathPort/discover/missing_scheme_host_path (0.02s)
+    --- PASS: TestPanelControlPlane_DiscoverHandshakeURLMustDialHostPathPort/discover/protocol_relative_ws (0.02s)
+PASS
+ok  	github.com/jasonsamtago/Gboard-Node/internal/controlplane	0.256s
+=== RUN   TestOrchestrator_TryStartWS_HandshakeURLMustDialHostPathPort
+=== RUN   TestOrchestrator_TryStartWS_HandshakeURLMustDialHostPathPort/ws_path_ws
+[90m23:34:48.674[0m [37mINFO [0m [34m[core][0m machine: ws mux started
+=== RUN   TestOrchestrator_TryStartWS_HandshakeURLMustDialHostPathPort/http_path_ws
+[90m23:34:48.694[0m [37mINFO [0m [34m[core][0m machine: ws mux started
+=== RUN   TestOrchestrator_TryStartWS_HandshakeURLMustDialHostPathPort/ws_custom_path
+[90m23:34:48.715[0m [37mINFO [0m [34m[core][0m machine: ws mux started
+=== RUN   TestOrchestrator_TryStartWS_HandshakeURLMustDialHostPathPort/http_custom_path
+[90m23:34:48.736[0m [37mINFO [0m [34m[core][0m machine: ws mux started
+=== RUN   TestOrchestrator_TryStartWS_HandshakeURLMustDialHostPathPort/missing_scheme_host_path
+[90m23:34:48.757[0m [37mINFO [0m [34m[core][0m machine: ws mux started
+=== RUN   TestOrchestrator_TryStartWS_HandshakeURLMustDialHostPathPort/protocol_relative_ws
+[90m23:34:48.778[0m [37mINFO [0m [34m[core][0m machine: ws mux started
+--- PASS: TestOrchestrator_TryStartWS_HandshakeURLMustDialHostPathPort (0.13s)
+    --- PASS: TestOrchestrator_TryStartWS_HandshakeURLMustDialHostPathPort/ws_path_ws (0.02s)
+    --- PASS: TestOrchestrator_TryStartWS_HandshakeURLMustDialHostPathPort/http_path_ws (0.02s)
+    --- PASS: TestOrchestrator_TryStartWS_HandshakeURLMustDialHostPathPort/ws_custom_path (0.02s)
+    --- PASS: TestOrchestrator_TryStartWS_HandshakeURLMustDialHostPathPort/http_custom_path (0.02s)
+    --- PASS: TestOrchestrator_TryStartWS_HandshakeURLMustDialHostPathPort/missing_scheme_host_path (0.02s)
+    --- PASS: TestOrchestrator_TryStartWS_HandshakeURLMustDialHostPathPort/protocol_relative_ws (0.02s)
+=== RUN   TestOrchestrator_TryStartWS_MalformedHandshakeURLMustDial
+=== RUN   TestOrchestrator_TryStartWS_MalformedHandshakeURLMustDial/http_scheme
+[90m23:34:48.799[0m [37mINFO [0m [34m[core][0m machine: ws mux started
+=== RUN   TestOrchestrator_TryStartWS_MalformedHandshakeURLMustDial/http_trailing_slash
+[90m23:34:48.820[0m [37mINFO [0m [34m[core][0m machine: ws mux started
+=== RUN   TestOrchestrator_TryStartWS_MalformedHandshakeURLMustDial/missing_scheme_host_path
+[90m23:34:48.841[0m [37mINFO [0m [34m[core][0m machine: ws mux started
+=== RUN   TestOrchestrator_TryStartWS_MalformedHandshakeURLMustDial/protocol_relative
+[90m23:34:48.862[0m [37mINFO [0m [34m[core][0m machine: ws mux started
+--- PASS: TestOrchestrator_TryStartWS_MalformedHandshakeURLMustDial (0.08s)
+    --- PASS: TestOrchestrator_TryStartWS_MalformedHandshakeURLMustDial/http_scheme (0.02s)
+    --- PASS: TestOrchestrator_TryStartWS_MalformedHandshakeURLMustDial/http_trailing_slash (0.02s)
+    --- PASS: TestOrchestrator_TryStartWS_MalformedHandshakeURLMustDial/missing_scheme_host_path (0.02s)
+    --- PASS: TestOrchestrator_TryStartWS_MalformedHandshakeURLMustDial/protocol_relative (0.02s)
+PASS
+ok  	github.com/jasonsamtago/Gboard-Node/internal/machine	0.729s
