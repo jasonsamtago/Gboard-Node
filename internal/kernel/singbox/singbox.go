@@ -22,6 +22,7 @@ import (
 	"github.com/jasonsamtago/Gboard-Node/internal/kernel"
 	"github.com/jasonsamtago/Gboard-Node/internal/kernel/geodata"
 	"github.com/jasonsamtago/Gboard-Node/internal/kernel/singbox/hy2inbound"
+	"github.com/jasonsamtago/Gboard-Node/internal/kernel/singbox/ssinbound"
 	"github.com/jasonsamtago/Gboard-Node/internal/kernel/singbox/tuicinbound"
 	"github.com/jasonsamtago/Gboard-Node/internal/kernel/singbox/vlessinbound"
 	"github.com/jasonsamtago/Gboard-Node/internal/kernel/singbox/vmessinbound"
@@ -102,6 +103,10 @@ func (s *SingBox) Protocols() []string {
 func (s *SingBox) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls kernel.TLSCert) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if err := shadowsocksPluginError(nodeConfig); err != nil {
+		return err
+	}
 
 	s.ensureGeoData(nodeConfig)
 
@@ -249,6 +254,10 @@ func (s *SingBox) Reload(nodeConfig *model.NodeSpec, users []model.UserSpec, tls
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if err := shadowsocksPluginError(nodeConfig); err != nil {
+		return err
+	}
+
 	if s.box == nil {
 		return fmt.Errorf("not running")
 	}
@@ -333,8 +342,8 @@ func (s *SingBox) Reload(nodeConfig *model.NodeSpec, users []model.UserSpec, tls
 						err = v.UpdateUsers(opts.Users)
 					}
 				case adapter.UpdatableShadowsocksInbound:
-					if opts, ok := inb.Options.(*option.ShadowsocksInboundOptions); ok {
-						err = v.UpdateUsersByOptions(opts.Users)
+					if users, ok := ssinbound.UsersFromOptions(inb.Options); ok {
+						err = v.UpdateUsersByOptions(users)
 					}
 				case adapter.UpdatableInbound[option.TUICUser]:
 					if opts, ok := inb.Options.(*option.TUICInboundOptions); ok {
@@ -721,8 +730,8 @@ func (s *SingBox) reloadInboundsLocked(users []model.UserSpec) error {
 					err = v.UpdateUsers(opts.Users)
 				}
 			case adapter.UpdatableShadowsocksInbound:
-				if opts, ok := inb.Options.(*option.ShadowsocksInboundOptions); ok {
-					err = v.UpdateUsersByOptions(opts.Users)
+				if users, ok := ssinbound.UsersFromOptions(inb.Options); ok {
+					err = v.UpdateUsersByOptions(users)
 				}
 			case adapter.UpdatableInbound[option.TUICUser]:
 				if opts, ok := inb.Options.(*option.TUICInboundOptions); ok {
@@ -810,8 +819,9 @@ func buildUserMap(users []model.UserSpec) map[string]int {
 	return m
 }
 
-// overrideHy2TUICInbounds swaps cedar2025 Hy2/TUIC/VLESS/VMess constructors.
+// overrideHy2TUICInbounds swaps cedar2025 Hy2/TUIC/VLESS/VMess/SS constructors.
 // VLESS／VMess 覆寫：熱更新用新 Service 原子替換，不准跟 NewConnection 搶 user map。
+// SS 覆寫：v2ray-plugin／gost-plugin 用官方 ws transport 真帶上，不准 ignoring。
 // Must run after include.Context.
 func overrideHy2TUICInbounds(ctx context.Context) {
 	reg, ok := service.FromContext[adapter.InboundRegistry](ctx).(*singInbound.Registry)
@@ -823,6 +833,14 @@ func overrideHy2TUICInbounds(ctx context.Context) {
 	tuicinbound.RegisterInbound(reg)
 	vlessinbound.RegisterInbound(reg)
 	vmessinbound.RegisterInbound(reg)
+	ssinbound.RegisterInbound(reg)
+}
+
+func shadowsocksPluginError(nc *model.NodeSpec) error {
+	if nc == nil {
+		return nil
+	}
+	return ssinbound.Validate(nc.Protocol, nc.Plugin, nc.PluginOpt)
 }
 
 func hy2HopRange(nc *model.NodeSpec) hy2inbound.Range {
