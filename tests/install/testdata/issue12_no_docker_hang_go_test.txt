@@ -1,0 +1,52 @@
+=== RUN   TestIssue12_InstallShHappyPathNoDockerDoesNotHang
+    no_docker_hang_test.go:44: === ATDD-1 Happy: PATH 無 docker，預設原生路徑不呼叫 docker、不掛起 ===
+        PASS: bash -n install.sh 在 5s 內通過
+        PASS: 靜態：install.sh 無 docker／docker-compose 字樣
+        PASS: 靜態：install.sh 不安裝 docker 套件
+        PASS: 靜態：install.sh 無 while true／sleep infinity
+        PASS: 靜態：read -p 只出現在 uninstall 確認（非 install 卡死）
+        PASS: 夾具：PATH 無 docker（command -v docker 失敗）
+        PASS: install.sh help 無 docker 時 5s 內退出 0
+        PASS: source 預檢（parse／validate／detect）無 docker、不掛起、預設原生 install
+        
+        issue12 summary: PASS=8 FAIL=0
+--- PASS: TestIssue12_InstallShHappyPathNoDockerDoesNotHang (0.05s)
+=== RUN   TestIssue12_InstallShHangingDockerStubIsNotCalled
+    no_docker_hang_test.go:48: === ATDD-2 邊界: 假 docker stub 會 hang，預設預檢仍不呼叫 ===
+        PASS: install.sh help 遇 hanging docker stub 仍 5s 內退出
+        PASS: source 預檢遇 hanging docker stub 仍不掛起
+        PASS: hanging docker stub 未被呼叫（證明預設不依賴 docker）
+        
+        issue12 summary: PASS=3 FAIL=0
+--- PASS: TestIssue12_InstallShHangingDockerStubIsNotCalled (0.05s)
+=== RUN   TestIssue12_OptionalDockerPathMustFailFastWhenMissing
+    no_docker_hang_test.go:52: === ATDD-3 失敗: 可選路徑若需要 docker，缺失時 ≤5s 非 0 並印 docker ===
+        PASS: 現 tip 無 ensure／require／check_docker 函式（預設原生，不強制 docker）
+        PASS: 契約夾具：docker 缺失時 5s 內非 0 並印 docker
+        PASS: 反例夾具：read 等 docker 會在 5s 被 timeout 抓到（測能打紅）
+        
+        issue12 summary: PASS=3 FAIL=0
+--- PASS: TestIssue12_OptionalDockerPathMustFailFastWhenMissing (5.05s)
+=== RUN   TestIssue12_InstallShSuiteFinishesWithinBudget
+    no_docker_hang_test.go:58: === ATDD-1 Happy: PATH 無 docker，預設原生路徑不呼叫 docker、不掛起 ===
+        PASS: bash -n install.sh 在 5s 內通過
+        PASS: 靜態：install.sh 無 docker／docker-compose 字樣
+        PASS: 靜態：install.sh 不安裝 docker 套件
+        PASS: 靜態：install.sh 無 while true／sleep infinity
+        PASS: 靜態：read -p 只出現在 uninstall 確認（非 install 卡死）
+        PASS: 夾具：PATH 無 docker（command -v docker 失敗）
+        PASS: install.sh help 無 docker 時 5s 內退出 0
+        PASS: source 預檢（parse／validate／detect）無 docker、不掛起、預設原生 install
+        === ATDD-2 邊界: 假 docker stub 會 hang，預設預檢仍不呼叫 ===
+        PASS: install.sh help 遇 hanging docker stub 仍 5s 內退出
+        PASS: source 預檢遇 hanging docker stub 仍不掛起
+        PASS: hanging docker stub 未被呼叫（證明預設不依賴 docker）
+        === ATDD-3 失敗: 可選路徑若需要 docker，缺失時 ≤5s 非 0 並印 docker ===
+        PASS: 現 tip 無 ensure／require／check_docker 函式（預設原生，不強制 docker）
+        PASS: 契約夾具：docker 缺失時 5s 內非 0 並印 docker
+        PASS: 反例夾具：read 等 docker 會在 5s 被 timeout 抓到（測能打紅）
+        
+        issue12 summary: PASS=14 FAIL=0
+--- PASS: TestIssue12_InstallShSuiteFinishesWithinBudget (5.15s)
+PASS
+ok  	github.com/jasonsamtago/Gboard-Node/tests/install	10.303s

@@ -1,0 +1,40 @@
+# 官方 cedar2025/Xboard-Node #12 — install.sh 無 docker 不得卡死
+# 指令：
+#   bash tests/install/no_docker_hang_test.sh
+#   go test ./tests/install -count=1 -timeout 30s
+# 基底：dev tip b8412cb（含 #13 回歸鎖）
+# 日期：2026-08-24
+# 結果：綠（回歸鎖／防回歸）。PASS=14 FAIL=0；go test ok 10.303s
+#
+# 以碼為準（不是修補）：
+# - 現 tip install.sh 是原生 binary＋systemd，全文沒有 docker 字樣
+# - read -p 只在 uninstall 確認；run_with_retry／wait_for_health 都有上限
+# - 官方 cedar 現版 install.sh 同樣無 docker
+# 官方「沒裝 docker 會卡死」更像舊版安裝器或 README 的 Docker／Compose
+# 部署路徑，不是現 tip 預設原生安裝隱式呼叫 docker。
+#
+# 不准改 production；不准強制安裝 docker；#18 本機安裝產品化不在本票。
+
+## 上下文（DDD）
+- 限界上下文：Node 安裝器（install.sh／本機部署）
+- 通用語言：install.sh 是原生安裝；Docker 是可選部署方式（README），
+  不是 install.sh 的硬依賴。卡死＝無進度、無明確錯誤、長時間不退出。
+- 不在範圍：Docker Compose 說明文件改寫、面板心跳（#4）、
+  本機安裝產品化（#18 整張）、FreeBSD（#62）
+
+## 本特性（FDD）
+- 用戶能：在沒有安裝 docker 的機器上跑 install.sh 預檢／安裝路徑，
+  不會卡死；若缺依賴，快速失敗並印清楚錯誤；預設走原生安裝，不呼叫 docker。
+- 不做：強制安裝 docker；把預設改成只支援 Docker；擴大到 #18。
+
+## 驗收（ATDD/BDD）
+1. Happy：PATH 無 docker → 預檢／靜態斷言不呼叫 docker、不掛起，預設原生。
+2. 邊界：PATH 有 sleep infinity 的 docker stub → 預設預檢仍不呼叫該 stub。
+3. 失敗：未來可選路徑若需要 docker，缺失時 ≤5s 非 0 並印 docker，
+   不准 read／無限 retry。契約夾具驗證快速失敗；反例 FIFO read 會被 timeout 抓紅。
+
+## 实现約束（TDD）
+1. 本輪只加失敗／鎖定測＋規格
+2. 現 tip 已滿足 → 測綠，標明回歸鎖／防回歸（同 #13）
+3. 若仍有 hang／隱式 docker → 必須紅，不改 production
+4. 不要擴大範圍
