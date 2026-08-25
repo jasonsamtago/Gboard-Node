@@ -1,0 +1,24 @@
+# 官方 cedar2025/Xboard-Node #48 — 實作輪測綠（只補 -trimpath）
+# 指令：
+#   go test ./tests/install -count=1 -timeout 30s -v -run 'TestIssue48_'
+# 基底：cursor/strip-go-binary-symbols-de05 tip df3c188（base dev c95a5da）
+# 日期：2026-08-25
+#
+# 結果：全綠。PASS=3 FAIL=0
+# Happy：正式 Makefile／Dockerfile go build 已含 -trimpath 與 -ldflags -s -w
+# 邊界：Makefile test／debug fixture 未 strip（測不強迫 test binary strip）
+# 失敗／回歸鎖：fixture 拿掉 -s -w 仍紅；現 tip 正式產物已有 -s -w
+#
+# 生產檔只改 Makefile＋Dockerfile。不准 skip、不准改測來假綠。
+# 不壓 alpine、不重寫多階段、不改 test／debug build。
+
+======== issue48（實作後全綠）========
+=== RUN   TestIssue48_FormalBuildMustStripSymbolsAndTrimpath
+--- PASS: TestIssue48_FormalBuildMustStripSymbolsAndTrimpath (0.00s)
+=== RUN   TestIssue48_GoTestAndDebugBuildMustNotRequireStrip
+    release_strip_test.go:93: 邊界：Makefile test 未 strip（正確，測不強迫 test binary strip）：go test -v -race -count=1 ./internal/... ./cmd/gbctl ./tests/install
+--- PASS: TestIssue48_GoTestAndDebugBuildMustNotRequireStrip (0.00s)
+=== RUN   TestIssue48_FormalBuildMissingSWMustFail
+--- PASS: TestIssue48_FormalBuildMissingSWMustFail (0.00s)
+PASS
+ok  	github.com/jasonsamtago/Gboard-Node/tests/install	0.004s

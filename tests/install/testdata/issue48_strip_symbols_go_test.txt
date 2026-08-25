@@ -1,0 +1,43 @@
+# 官方 cedar2025/Xboard-Node #48 — 本輪 TDD 紅（不改 production）
+# 指令：
+#   go test ./tests/install -count=1 -timeout 30s -run 'TestIssue48_'
+# 基底：dev tip c95a5da（已含 PR #36 merge）
+# 日期：2026-08-25
+#
+# 結果：Happy 紅（失敗測成立）。邊界綠。失敗／回歸鎖綠。
+# 現況：Makefile／Dockerfile 已有 -s -w，正式 go build 都缺 -trimpath。
+# CI workflow 無 raw go build（build 走 make build-linux*，映像走 Dockerfile）。
+# testdata 寫明：拿掉 -s -w 時 TestIssue48_FormalBuildMissingSWMustFail 必須仍紅。
+# 不准改 production。
+#
+# 漏了 -trimpath 的檔：
+# - Makefile（build／build-linux／build-linux-arm64 的 go build）
+# - Dockerfile（builder 的 go build）
+# -s -w 已齊（Makefile LDFLAGS、Dockerfile -ldflags）。
+
+======== issue48（Happy 紅；邊界／-s -w 回歸鎖綠）========
+=== RUN   TestIssue48_FormalBuildMustStripSymbolsAndTrimpath
+    release_strip_test.go:60: 官方 #48：正式映像／發布二進位必須 go build -trimpath -ldflags="-s -w"（-s 丟 symbol table、-w 丟 DWARF、-trimpath 去本機路徑）。漏了就不算修：
+        Makefile:build#0: 缺 -trimpath（或 GOFLAGS=-trimpath）
+            cmd=go build -ldflags "$(LDFLAGS)" -tags "with_quic with_utls with_wireguard with_clash_api" -o gboard-node ./cmd/gboard-node
+        Makefile:build#1: 缺 -trimpath（或 GOFLAGS=-trimpath）
+            cmd=go build -ldflags "$(LDFLAGS)" -o gbctl ./cmd/gbctl
+        Makefile:build-linux#0: 缺 -trimpath（或 GOFLAGS=-trimpath）
+            cmd=CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -tags "with_quic with_utls with_wireguard with_acme with_clash_api" -o gboard-node-linux-amd64 ./cmd/gboard-node
+        Makefile:build-linux#1: 缺 -trimpath（或 GOFLAGS=-trimpath）
+            cmd=CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o gbctl-linux-amd64 ./cmd/gbctl
+        Makefile:build-linux-arm64#0: 缺 -trimpath（或 GOFLAGS=-trimpath）
+            cmd=CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -tags "with_quic with_utls with_wireguard with_acme with_clash_api" -o gboard-node-linux-arm64 ./cmd/gboard-node
+        Makefile:build-linux-arm64#1: 缺 -trimpath（或 GOFLAGS=-trimpath）
+            cmd=CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -o gbctl-linux-arm64 ./cmd/gbctl
+        Dockerfile#0: 缺 -trimpath（或 GOFLAGS=-trimpath）
+            cmd=RUN CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=$(git describe --tags --always --dirty 2>/dev/null || echo dev) -X main.buildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -tags "with_quic with_utls with_wireguard with_clash_api" -o gboard-node ./cmd/gboard-node
+--- FAIL: TestIssue48_FormalBuildMustStripSymbolsAndTrimpath (0.00s)
+=== RUN   TestIssue48_GoTestAndDebugBuildMustNotRequireStrip
+    release_strip_test.go:93: 邊界：Makefile test 未 strip（正確，測不強迫 test binary strip）：go test -v -race -count=1 ./internal/... ./cmd/gbctl ./tests/install
+--- PASS: TestIssue48_GoTestAndDebugBuildMustNotRequireStrip (0.00s)
+=== RUN   TestIssue48_FormalBuildMissingSWMustFail
+--- PASS: TestIssue48_FormalBuildMissingSWMustFail (0.00s)
+FAIL
+FAIL	github.com/jasonsamtago/Gboard-Node/tests/install	0.004s
+FAIL

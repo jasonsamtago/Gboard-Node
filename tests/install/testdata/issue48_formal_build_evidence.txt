@@ -1,0 +1,85 @@
+# 官方 cedar2025/Xboard-Node #48 — 正式 build 證據（只補 -trimpath）
+# 日期：2026-08-25
+# SHA：df3c188224542f1bbdad69f39e909f84d79c6cc1
+# 分支：cursor/strip-go-binary-symbols-de05
+# Go：go1.26.7 linux/amd64
+#
+# 證明範圍：正式 Makefile build-linux（CI 同這條）。Dockerfile 指令同樣加了 -trimpath。
+# 不為了證明去改 alpine／重寫多階段。未 strip 對照是本機另編，不改 production。
+
+======== 1. make -n build-linux（展開後必須含 -trimpath -ldflags ... -s -w）========
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=df3c188 -X main.buildTime=2026-08-25T10:18:51Z -X main.commit=df3c188" -tags "with_quic with_utls with_wireguard with_acme with_clash_api" -o gboard-node-linux-amd64 ./cmd/gboard-node
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=df3c188 -X main.buildTime=2026-08-25T10:18:51Z -X main.commit=df3c188" -o gbctl-linux-amd64 ./cmd/gbctl
+
+======== 2. 實際 make build-linux（指令與 -n 一致）========
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=df3c188 -X main.buildTime=2026-08-25T10:18:51Z -X main.commit=df3c188" -tags "with_quic with_utls with_wireguard with_acme with_clash_api" -o gboard-node-linux-amd64 ./cmd/gboard-node
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=df3c188 -X main.buildTime=2026-08-25T10:18:51Z -X main.commit=df3c188" -o gbctl-linux-amd64 ./cmd/gbctl
+
+======== 3. Dockerfile 正式 go build（同樣只加 -trimpath）========
+RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w \
+    -X main.version=$(git describe --tags --always --dirty 2>/dev/null || echo dev) \
+    -X main.buildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    -tags "with_quic with_utls with_wireguard with_clash_api" \
+    -o gboard-node ./cmd/gboard-node
+
+======== 4. go version -m（正式產物）========
+# gboard-node-linux-amd64 關鍵列：
+#   build	-trimpath=true
+#   build	CGO_ENABLED=0
+#   build	GOOS=linux
+#   build	vcs.revision=df3c188224542f1bbdad69f39e909f84d79c6cc1
+#
+# gbctl-linux-amd64 關鍵列：
+#   build	-trimpath=true
+#   build	CGO_ENABLED=0
+#   build	GOOS=linux
+#   build	vcs.revision=df3c188224542f1bbdad69f39e909f84d79c6cc1
+
+gboard-node-linux-amd64: go1.26.7
+	path	github.com/jasonsamtago/Gboard-Node/cmd/gboard-node
+	mod	github.com/jasonsamtago/Gboard-Node	v0.0.0-20260825101808-df3c18822454	
+	build	-buildmode=exe
+	build	-compiler=gc
+	build	-tags=with_quic,with_utls,with_wireguard,with_acme,with_clash_api
+	build	-trimpath=true
+	build	CGO_ENABLED=0
+	build	GOARCH=amd64
+	build	GOOS=linux
+	build	GOAMD64=v1
+	build	vcs=git
+	build	vcs.revision=df3c188224542f1bbdad69f39e909f84d79c6cc1
+	build	vcs.time=2026-08-25T10:18:08Z
+	build	vcs.modified=false
+
+gbctl-linux-amd64: go1.26.7
+	path	github.com/jasonsamtago/Gboard-Node/cmd/gbctl
+	mod	github.com/jasonsamtago/Gboard-Node	v0.0.0-20260825101808-df3c18822454	
+	build	-buildmode=exe
+	build	-compiler=gc
+	build	-trimpath=true
+	build	CGO_ENABLED=0
+	build	GOARCH=amd64
+	build	GOOS=linux
+	build	GOAMD64=v1
+	build	vcs=git
+	build	vcs.revision=df3c188224542f1bbdad69f39e909f84d79c6cc1
+	build	vcs.time=2026-08-25T10:18:08Z
+	build	vcs.modified=false
+
+======== 5. file／readelf（-s 丟 symbol table、-w 丟 DWARF）========
+gboard-node-linux-amd64:              ELF 64-bit LSB executable, x86-64, stripped
+/tmp/gboard-node-linux-amd64-nostrip: ELF 64-bit LSB executable, x86-64, with debug_info, not stripped
+正式產物：無 .symtab／.debug
+未 strip 對照：有 .symtab、.debug_info、.debug_line 等
+
+======== 6. -trimpath：正式產物無本機 .go 路徑 ========
+未 strip 對照可見：
+  /workspace/internal/nlog/nlog.go
+  /home/ubuntu/go/pkg/mod/golang.org/x/sys@v0.42.0/unix/syscall_linux.go
+正式 strip＋trimpath：strings 找不到 /workspace/*.go 或 /home/ubuntu/*.go
+
+======== 7. 檔案大小對照（本機另編未 strip，不改 Makefile／alpine）========
+gboard-node-linux-amd64: 未 strip=94083663 bytes（90M）, 正式 strip=67272866 bytes（65M）, 縮小 28.5%
+gbctl-linux-amd64:       未 strip=10337825 bytes（9.9M）, 正式 strip=7123106 bytes（6.8M）, 縮小 31.1%
+
+官方票預期約小 30%。本對照接近該幅度；未改 alpine。

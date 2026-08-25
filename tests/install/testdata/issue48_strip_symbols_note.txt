@@ -1,0 +1,33 @@
+# 官方 cedar2025/Xboard-Node #48 — 正式 build 必須 -trimpath -ldflags="-s -w"
+# 指令：
+#   go test ./tests/install -count=1 -timeout 30s -run 'TestIssue48_'
+# 基底：dev tip c95a5da（已含 PR #36 merge）
+# 日期：2026-08-25
+# 結果：Happy 紅（缺 -trimpath）。邊界綠。-s -w 回歸鎖綠。
+#
+# 以碼為準（不是修補）：
+# - Makefile LDFLAGS 已有 -s -w；build／build-linux／build-linux-arm64 用 $(LDFLAGS)
+# - Dockerfile go build 已有 -ldflags "-s -w"
+# - 正式 go build 都沒有 -trimpath（Happy 必須紅）
+# - CI build 走 make build-linux*；build-docker 走 Dockerfile；workflow 無 raw go build
+# - testdata fixture：拿掉 -s -w 必須仍紅（回歸鎖）。不要為了紅去改 production。
+#
+# 不准改 production；不准 skip；不准擴大到壓 alpine／重寫多階段。
+#
+# 實作輪（df3c188）：只補 Makefile／Dockerfile -trimpath。TestIssue48_ 全綠。
+# 正式 make build-linux 證據見 issue48_formal_build_evidence.txt。
+
+## 上下文（DDD）
+- 限界上下文：Node 發布產物（正式 Docker 映像／Makefile 發布二進位）
+- 通用語言：strip＝-s（symbol table）＋-w（DWARF）；-trimpath 去本機路徑。
+  正式產物＝Makefile build／linux 交叉編、Dockerfile。go test／debug 不強迫 strip。
+- 不在範圍：壓基底、改 alpine、重寫多階段、改 production
+
+## 本特性（FDD）
+- 用戶能：正式映像／發布二進位已 strip＋trimpath。
+- 不做：強迫 test binary strip；改 production。
+
+## 驗收（ATDD/BDD）
+1. Happy：正式 build 必須含 -ldflags -s／-w 與 -trimpath（或等價）
+2. 邊界：go test／未 strip 本機 debug 不回歸
+3. 失敗：正式 Dockerfile／workflow／Makefile build 漏 -s／-w → 必須紅
