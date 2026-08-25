@@ -881,11 +881,32 @@ func buildInbound(nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert)
 		inbound = buildHTTP(base, nc, users, tc)
 	case "mieru":
 		inbound = buildMieru(base, nc, users)
+	case "ssh":
+		inbound = buildSSH(base, nc, users)
 	default:
 		return nil
 	}
 	dropUnusableInboundCertificatePaths(inbound)
 	return inbound
+}
+
+func buildSSH(base M, nc *model.NodeSpec, users []model.UserSpec) M {
+	base["type"] = "ssh"
+	userList := make([]M, 0, len(users))
+	for _, u := range users {
+		if strings.TrimSpace(u.UUID) == "" {
+			continue
+		}
+		userList = append(userList, M{
+			"name":     u.UUID,
+			"password": u.UUID,
+		})
+	}
+	base["users"] = userList
+	if nc != nil && strings.TrimSpace(nc.ServerKey) != "" {
+		base["host_key"] = []string{nc.ServerKey}
+	}
+	return base
 }
 
 func buildMieru(base M, nc *model.NodeSpec, users []model.UserSpec) M {
