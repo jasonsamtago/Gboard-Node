@@ -48,4 +48,8 @@ https://github.com/cedar2025/Xboard-Node/issues/14
 
 ## 本輪實測（dev f37e453，不改 production）
 
-- 待跑 `go test` 後回填（綠＝回歸鎖／官方指 #14；紅＝現況仍丟 rules 或走不到 outbound）
+- sing-box：綠（回歸鎖）。Happy／普通節點／只 WARN 鎖／結構化規則／走錯 outbound 全 PASS。
+- 現況已綠、當回歸鎖；官方指 #14（已合的 `splitCustomRouteRuleSet`＋自訂 outbound 已能真分流）。
+- 測仍會在丟掉 `route.rules`／`rule_set` 不上／只 WARN／走錯 outbound 時紅。
+- 詳見 `issue17_traffic_split_go_test.txt`
+- 建議：合測即可，不必再開 #14 實作。

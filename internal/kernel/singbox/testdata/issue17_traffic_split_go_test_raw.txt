@@ -1,0 +1,31 @@
+=== RUN   TestCustomRouteRuleSet_面板官方wrapper必須進config
+--- PASS: TestCustomRouteRuleSet_面板官方wrapper必須進config (0.00s)
+=== RUN   TestCustomRouteRuleSet_面板remote_binary必須進config
+--- PASS: TestCustomRouteRuleSet_面板remote_binary必須進config (0.00s)
+=== RUN   TestCustomRouteRuleSet_kernel_custom_route必須進config
+--- PASS: TestCustomRouteRuleSet_kernel_custom_route必須進config (0.00s)
+=== RUN   TestCustomRouteRuleSet_面板rule與定義分開列出也必須進config
+--- PASS: TestCustomRouteRuleSet_面板rule與定義分開列出也必須進config (0.00s)
+=== RUN   TestCustomRouteRuleSet_面板local_binary必須起核並套用
+--- PASS: TestCustomRouteRuleSet_面板local_binary必須起核並套用 (0.00s)
+=== RUN   TestCustomRouteRuleSet_面板remote_binary必須起核並套用
+--- PASS: TestCustomRouteRuleSet_面板remote_binary必須起核並套用 (0.03s)
+=== RUN   TestCustomRouteRuleSet_kernel_custom_route必須起核
+--- PASS: TestCustomRouteRuleSet_kernel_custom_route必須起核 (0.00s)
+=== RUN   TestCustomRouteRuleSet_不准改寫成廢棄geosite
+--- PASS: TestCustomRouteRuleSet_不准改寫成廢棄geosite (0.00s)
+=== RUN   TestCustomRouteRuleSet_假修要被抓到
+--- PASS: TestCustomRouteRuleSet_假修要被抓到 (0.00s)
+=== RUN   TestTrafficSplit_面板rule_set必須進config並走對outbound
+--- PASS: TestTrafficSplit_面板rule_set必須進config並走對outbound (0.00s)
+=== RUN   TestTrafficSplit_無自訂路由普通節點不回歸
+--- PASS: TestTrafficSplit_無自訂路由普通節點不回歸 (0.00s)
+=== RUN   TestTrafficSplit_rules被丟或只WARN必須紅
+--- PASS: TestTrafficSplit_rules被丟或只WARN必須紅 (0.00s)
+=== RUN   TestTrafficSplit_結構化custom_route_rules仍須分流
+--- PASS: TestTrafficSplit_結構化custom_route_rules仍須分流 (0.00s)
+=== RUN   TestTrafficSplit_走錯outbound必須紅
++0000 2026-08-25 06:08:15 [31mERROR[0m [[38;5;109m3074460765[0m 0ms] connection: open connection to plain.issue17.test:443 using outbound/direct[direct]: lookup plain.issue17.test: (exchange6: NXDOMAIN | exchange4: NXDOMAIN)
+--- PASS: TestTrafficSplit_走錯outbound必須紅 (0.00s)
+PASS
+ok  	github.com/jasonsamtago/Gboard-Node/internal/kernel/singbox	0.077s
