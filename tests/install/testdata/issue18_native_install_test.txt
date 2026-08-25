@@ -1,0 +1,28 @@
+=== ATDD-1 Happy: 無 Docker、不加 --docker，下載二進位＋寫設定 ===
+PASS: 靜態：install.sh 無 docker／docker-compose（不加 --docker 就是原生）
+PASS: 靜態：install.sh 無 docker 硬依賴函式
+PASS: 靜態：install.sh 有下載二進位＋寫設定函式
+PASS: 夾具：PATH 無 docker
+PASS: 不加 --docker：parse／validate 預設原生 install
+PASS: resolve_download_url 產出 Go 二進位 URL（非 docker）
+PASS: curl 下載 Go 二進位（urls=https://github.com/jasonsamtago/Gboard-Node/releases/download/dev/gboard-node-linux-amd64 https://github.com/jasonsamtago/Gboard-Node/releases/download/dev/gbctl-linux-amd64 ）
+PASS: 輸出未要求／卡住 Docker
+PASS: 走到下載二進位＋寫設定（config.yml 含 panel）
+=== ATDD-2 邊界: 文件必須寫明本機安裝（不加 --docker 或等價） ===
+PASS: README 宣告 install.sh
+PASS: README 有 Installer／systemd／本機安裝段
+PASS: README install.sh 範例不加 --docker
+PASS: install.sh help 說明本機安裝／下載二進位
+PASS: install.sh help 不加 --docker（等價：預設就是下載二進位＋設定檔）
+PASS: install.sh help 不是「請用 docker」
+PASS: install.sh 本機路徑＝下載 Go 二進位
+=== ATDD-3 失敗: 硬依賴 Docker／只提示裝 Docker 必須紅 ===
+PASS: 現 tip 無 docker 硬依賴（回歸鎖綠；若有人加上必須紅）
+PASS: install.sh 不是只提示裝 Docker
+PASS: README 未把本機安裝收成只剩 Docker
+PASS: 反例夾具：只提示裝 Docker 會被本測當產品失敗（測能打紅）
+PASS: 反例夾具：硬依賴 docker-compose 在無 docker 時失敗（測能打紅）
+PASS: 反例夾具：沒 docker 就掛死會被 timeout 抓到（測能打紅）
+PASS: 契約夾具：無 docker 也能下二進位＋寫設定
+
+issue18 summary: PASS=23 FAIL=0

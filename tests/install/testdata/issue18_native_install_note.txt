@@ -1,0 +1,33 @@
+# 官方 cedar2025/Xboard-Node #18 — 本機安裝（無 Docker）必須可用
+# 指令：
+#   bash tests/install/native_install_test.sh
+#   go test ./tests/install -count=1 -timeout 30s -run 'TestIssue18_'
+# 基底：dev tip 6f1bf59（含 PR #35 merge；含 #12 無 docker 卡死回歸鎖）
+# 日期：2026-08-25
+# 結果：綠（回歸鎖／防回歸）。PASS=23 FAIL=0；go test issue18 ok
+#
+# 現況已綠、當回歸鎖；官方叫用 install.sh 不加 --docker。
+#
+# 以碼為準（不是修補）：
+# - 現 tip install.sh 是原生 binary＋systemd，全文沒有 docker／--docker
+# - resolve_download_url／stage_binary／render_config＝下載 Go 二進位＋寫設定
+# - README「Installer (Linux systemd)」用 install.sh，不加 --docker
+# - #12 已鎖卡死；本張鎖本機安裝產品路徑
+# 官方「能不能出個本地安裝版本」已由現 install.sh／#12 覆蓋。
+#
+# 不准改 production；不要重做 #12 的測檔。建議合測即可。
+
+## 上下文（DDD）
+- 限界上下文：Node 安裝器（install.sh／README 本機部署）
+- 通用語言：本地安裝＝不加 --docker 就下載 Go 二進位＋寫設定；
+  Docker 是可選部署，不是硬依賴。
+- 不在範圍：重做 #12、改 production、把預設改成請用 docker
+
+## 本特性（FDD）
+- 用戶能：沒裝 Docker 也能跑 install.sh 本機安裝，走到下二進位＋寫設定。
+- 不做：強制 Docker；重做 #12；改 production。
+
+## 驗收（ATDD/BDD）
+1. Happy：無 Docker、不加 --docker → 下載二進位＋寫設定，不要求 Docker
+2. 邊界：README／help 寫明本機安裝（不加 --docker 或等價）
+3. 失敗：硬依賴 docker／沒 docker 掛死／只提示裝 Docker → 必須紅
