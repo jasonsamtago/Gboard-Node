@@ -119,7 +119,7 @@ func (x *Xray) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls ker
 	// ── Phase 1: Build config (no shared state) ─────────────────────────
 	x.ensureGeoData(nodeConfig)
 
-	listenSpec, proxy, err := maybeStartTCPHTTPHostProxy(nodeConfig)
+	listenSpec, proxy, err := maybeStartFrontProxy(nodeConfig)
 	if err != nil {
 		return err
 	}

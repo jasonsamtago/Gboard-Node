@@ -4,6 +4,7 @@ import (
 	"io"
 	"net"
 	"strconv"
+	"strings"
 
 	"github.com/jasonsamtago/Gboard-Node/internal/kernel/hostfilter"
 	"github.com/jasonsamtago/Gboard-Node/internal/model"
@@ -13,6 +14,13 @@ import (
 // xray 的 HTTP disguise 只核對 path，不核對 Host；設了 Host 時必須擋錯 Host。
 type hostProxy struct {
 	ln net.Listener
+}
+
+func maybeStartFrontProxy(nc *model.NodeSpec) (*model.NodeSpec, *hostProxy, error) {
+	if nc != nil && strings.EqualFold(nc.Network, "http") {
+		return maybeStartHTTPTransport(nc)
+	}
+	return maybeStartTCPHTTPHostProxy(nc)
 }
 
 func maybeStartTCPHTTPHostProxy(nc *model.NodeSpec) (*model.NodeSpec, *hostProxy, error) {

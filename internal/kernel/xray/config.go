@@ -516,18 +516,17 @@ func applyStreamSettings(base M, nc *model.NodeSpec, tc kernel.TLSCert) {
 		}
 		ss["httpupgradeSettings"] = huSettings
 
-	case "h2", "http":
+	case "http":
+		// 面板 network=http 必須維持 network=http＋httpSettings（官方 #31）。
+		// 不准改寫成 h2／httpupgrade。xray-core 26 已刪舊 HTTP transport
+		//（官方改走 XHTTP stream-one），Start 時由 HTTP/1.1 前端解包再交給
+		// 核內 raw TCP VMess；XHTTP 與 sing-box／V2Ray HTTP/1.1 客戶端不相容。
+		ss["network"] = "http"
+		ss["httpSettings"] = buildHTTPSettings(nc)
+
+	case "h2":
 		ss["network"] = "h2"
-		h2Settings := M{}
-		if nc.NetworkSettings != nil {
-			if v, ok := nc.NetworkSettings["path"]; ok {
-				h2Settings["path"] = v
-			}
-			if v, ok := nc.NetworkSettings["host"]; ok {
-				h2Settings["host"] = []interface{}{v}
-			}
-		}
-		ss["httpSettings"] = h2Settings
+		ss["httpSettings"] = buildHTTPSettings(nc)
 
 	case "xhttp", "splithttp":
 		ss["network"] = "xhttp"
@@ -617,6 +616,20 @@ func applyStreamSettings(base M, nc *model.NodeSpec, tc kernel.TLSCert) {
 	}
 
 	base["streamSettings"] = ss
+}
+
+func buildHTTPSettings(nc *model.NodeSpec) M {
+	httpSettings := M{}
+	if nc == nil || nc.NetworkSettings == nil {
+		return httpSettings
+	}
+	if v, ok := nc.NetworkSettings["path"]; ok {
+		httpSettings["path"] = v
+	}
+	if v, ok := nc.NetworkSettings["host"]; ok {
+		httpSettings["host"] = []interface{}{v}
+	}
+	return httpSettings
 }
 
 // buildTCPHTTPSettings writes the panel tcp+http disguise (header.type=http +
