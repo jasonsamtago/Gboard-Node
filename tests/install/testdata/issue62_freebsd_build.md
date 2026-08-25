@@ -46,4 +46,9 @@
 
 ## 本輪實測（dev d15d962，不改 production）
 
-見 `issue62_freebsd_build_note.txt`、`issue62_freebsd_build_go_test.txt`。
+- Happy：**紅**。`make -n build-freebsd` 無此目標；`uname=FreeBSD` 仍拿 `gboard-node-linux-amd64` 並寫 systemd（無 rc.d）
+- 邊界：**綠**。Linux 仍走 systemd＋`*-linux-*`
+- 失敗：**紅**。未知 OS／缺 freebsd 成品都靜默當 linux
+- fixture 契約：**綠**（硬編碼／當 linux 反例、freebsd＋rc.d／明示失敗正例）
+- 詳見 `issue62_freebsd_build_go_test.txt`
+- 不准改 production；方向過再補 `make build-freebsd`＋`install.sh` 依 uname 選 `gboard-node-freebsd-${ARCH}` 並寫 rc.d

@@ -1,33 +1,27 @@
-# 官方 cedar2025/Xboard-Node #62 — FreeBSD 編譯產物＋install.sh 自適應
+# 官方 cedar2025/Xboard-Node #62 — 審核2 ATDD 鎖定測
 # 指令：
 #   go test ./tests/install -v -count=1 -timeout 60s -run 'TestIssue62_'
-#   bash tests/install/freebsd_build_test.sh fixtures
 # 基底：dev tip d15d962（已含 PR #37 merge）
 # 日期：2026-08-25
 # 結果：Happy 紅。邊界綠。失敗鎖紅。fixture 契約綠。
 #
-# 以碼為準（不是修補）：
-# - Makefile 只有 build-linux／build-linux-arm64，沒有 GOOS=freebsd／build-freebsd
-# - CI matrix／Release 只有 linux artifact
-# - install.sh stage_binary 硬編碼 resolve_download_url "gboard-node-linux-${ARCH}"
-# - install.sh stage_gbctl 硬編碼 resolve_download_url "gbctl-linux-${ARCH}"
-# - detect_os 只讀 /etc/os-release（模擬 uname=FreeBSD 時 OS 仍是 ubuntu）
-# - detect_arch 只讀 uname -m，不讀 uname -s
-# - 模擬 uname=FreeBSD 仍下 gboard-node-linux-amd64／gbctl-linux-amd64
+# 審核2寫死（測已對齊，不擴大）：
+# DDD：限界＝發布／安裝（Makefile＋install.sh）
+#   編譯檔＝make build-freebsd → gboard-node-freebsd-${ARCH}
+#   自適應＝同一條 curl|bash 依 uname 選該成品＋寫 rc.d（不是 systemd）
+#   不做 ports/pkg、OpenBSD／macOS、核心移植
+# FDD：FreeBSD 用同一安裝命令裝上可跑的 node
+#   不做：改 Linux 路徑、靜默拿 linux 二進位、擴大發行面
+# ATDD：
+#   Happy：make build-freebsd 產出 gboard-node-freebsd-${ARCH}；
+#          uname=FreeBSD 拿該成品並寫 rc.d
+#   邊界：Linux 仍走 systemd＋*-linux-*
+#   失敗：未知 OS／缺 freebsd 成品要明示失敗，不准當 linux
 #
-# 不准改 production；不准 skip；不准擴大到真機服務／kernel／jail。
-# 不要重做 #18。現況不是回歸鎖綠（缺 freebsd 目標＋URL 硬編碼 linux）。
-
-## 上下文（DDD）
-- 限界上下文：發布產物（Makefile／CI）＋安裝器下載 URL
-- 通用語言：FreeBSD 編譯＝GOOS=freebsd 正式目標；自適應＝uname=FreeBSD 下 freebsd 包
-- 不在範圍：真機 rc.d／jail、改 kernel、重做 #18、改 production
-
-## 本特性（FDD）
-- 用戶能：正式編出 freebsd 二進位；安裝命令在 FreeBSD 自適應下載 freebsd 包
-- 不做：本輪改 production；真機跑服務
-
-## 驗收（ATDD/BDD）
-1. Happy：正式 GOOS=freebsd 目標存在；uname=FreeBSD → freebsd URL → 現況紅
-2. 邊界：linux／amd64 本機安裝不回歸（#18）→ 綠
-3. 失敗：uname=FreeBSD 仍下 linux／拒絕／掛死 → 現況紅
+# 以碼為準（不是修補）：
+# - Makefile 無 build-freebsd（make -n 無此目標）
+# - install.sh stage_binary 硬編碼 gboard-node-linux-${ARCH}
+# - install.sh 硬綁 systemd（SERVICE_PATH／write_service_unit／ensure_systemd），無 rc.d
+# - 未知 OS、缺 freebsd 成品都靜默當 linux
+#
+# 不准改 production；不准 skip。
