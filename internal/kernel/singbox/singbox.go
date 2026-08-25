@@ -22,6 +22,7 @@ import (
 	"github.com/jasonsamtago/Gboard-Node/internal/kernel"
 	"github.com/jasonsamtago/Gboard-Node/internal/kernel/geodata"
 	"github.com/jasonsamtago/Gboard-Node/internal/kernel/singbox/hy2inbound"
+	"github.com/jasonsamtago/Gboard-Node/internal/kernel/singbox/sshinbound"
 	"github.com/jasonsamtago/Gboard-Node/internal/kernel/singbox/ssinbound"
 	"github.com/jasonsamtago/Gboard-Node/internal/kernel/singbox/tuicinbound"
 	"github.com/jasonsamtago/Gboard-Node/internal/kernel/singbox/vlessinbound"
@@ -96,7 +97,7 @@ func (s *SingBox) Capabilities() kernel.Capabilities {
 func (s *SingBox) Protocols() []string {
 	return []string{
 		"vmess", "vless", "trojan", "shadowsocks",
-		"hysteria", "hysteria2", "tuic", "naive", "socks", "http", "anytls", "mieru",
+		"hysteria", "hysteria2", "tuic", "naive", "socks", "http", "anytls", "mieru", "ssh",
 	}
 }
 
@@ -105,6 +106,9 @@ func (s *SingBox) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls 
 	defer s.mu.Unlock()
 
 	if err := shadowsocksPluginError(nodeConfig); err != nil {
+		return err
+	}
+	if err := sshInboundAuthError(nodeConfig, users); err != nil {
 		return err
 	}
 
@@ -255,6 +259,9 @@ func (s *SingBox) Reload(nodeConfig *model.NodeSpec, users []model.UserSpec, tls
 	defer s.mu.Unlock()
 
 	if err := shadowsocksPluginError(nodeConfig); err != nil {
+		return err
+	}
+	if err := sshInboundAuthError(nodeConfig, users); err != nil {
 		return err
 	}
 
@@ -834,6 +841,7 @@ func overrideHy2TUICInbounds(ctx context.Context) {
 	vlessinbound.RegisterInbound(reg)
 	vmessinbound.RegisterInbound(reg)
 	ssinbound.RegisterInbound(reg)
+	sshinbound.RegisterInbound(reg)
 }
 
 func shadowsocksPluginError(nc *model.NodeSpec) error {
@@ -841,6 +849,13 @@ func shadowsocksPluginError(nc *model.NodeSpec) error {
 		return nil
 	}
 	return ssinbound.Validate(nc.Protocol, nc.Plugin, nc.PluginOpt)
+}
+
+func sshInboundAuthError(nc *model.NodeSpec, users []model.UserSpec) error {
+	if nc == nil {
+		return nil
+	}
+	return sshinbound.Validate(nc.Protocol, users, nc.ServerKey)
 }
 
 func hy2HopRange(nc *model.NodeSpec) hy2inbound.Range {
