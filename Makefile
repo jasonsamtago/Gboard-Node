@@ -1,8 +1,9 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 BUILD_TIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+ARCH ?= amd64
 LDFLAGS := -s -w -X main.version=$(VERSION) -X main.buildTime=$(BUILD_TIME) -X main.commit=$(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 
-.PHONY: build clean test docker install build-linux build-linux-arm64 build-all
+.PHONY: build clean test docker install build-linux build-linux-arm64 build-freebsd build-all
 
 # Build for current platform
 build:
@@ -19,6 +20,12 @@ build-linux-arm64:
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "$(LDFLAGS)" -tags "with_quic with_utls with_wireguard with_acme with_clash_api" -o gboard-node-linux-arm64 ./cmd/gboard-node
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "$(LDFLAGS)" -o gbctl-linux-arm64 ./cmd/gbctl
 
+# Build for FreeBSD (override with ARCH=arm64). Same formal -trimpath -ldflags -s -w as Linux.
+# Not added to build-all / CI matrix — official #62 is compile target + install.sh only.
+build-freebsd:
+	CGO_ENABLED=0 GOOS=freebsd GOARCH=$(ARCH) go build -trimpath -ldflags "$(LDFLAGS)" -tags "with_quic with_utls with_wireguard with_acme with_clash_api" -o gboard-node-freebsd-$(ARCH) ./cmd/gboard-node
+	CGO_ENABLED=0 GOOS=freebsd GOARCH=$(ARCH) go build -trimpath -ldflags "$(LDFLAGS)" -o gbctl-freebsd-$(ARCH) ./cmd/gbctl
+
 # Build all platforms
 build-all: build-linux build-linux-arm64
 
@@ -28,7 +35,7 @@ test:
 
 # Clean build artifacts
 clean:
-	rm -f gboard-node gbctl gboard-node-linux-* gbctl-linux-*
+	rm -f gboard-node gbctl gboard-node-linux-* gbctl-linux-* gboard-node-freebsd-* gbctl-freebsd-*
 
 # Build Docker image
 docker:
