@@ -5,88 +5,71 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"testing"
-	"time"
 )
 
 // 官方 cedar2025/Xboard-Node #62：麻烦增加下FreeBSD编译文件
 // https://github.com/cedar2025/Xboard-Node/issues/62
 //
-// 內文：1. freebsd 裝不了  2. 最好能配合 xboard 的安裝命令自適應安裝
+// 審核 2 已把 ATDD 寫死。本輪只加失敗測，不准改 production。
+// 限界：發布／安裝（Makefile＋install.sh）。
+// 編譯檔＝make build-freebsd 產出 gboard-node-freebsd-${ARCH}。
+// 自適應＝同一條 curl|bash 依 uname 選該成品＋寫 rc.d（不是 systemd）。
+// 不做 ports/pkg、OpenBSD／macOS、核心移植、擴大發行面。
 //
-// 審核 2：本輪只加失敗測／回歸鎖，不准改 production。
-// 範圍只鎖編譯產物＋install.sh 自適應。不准擴大到真機跑 FreeBSD 服務、
-// 改 kernel、整包移植 jail。
+// ATDD：
+//  1. Happy：make build-freebsd 產出 gboard-node-freebsd-${ARCH}；
+//     uname=FreeBSD 時 install.sh 拿該成品並寫 rc.d
+//  2. 邊界：Linux 仍走 systemd＋*-linux-*
+//  3. 失敗：未知 OS／缺 freebsd 成品要明示失敗，不准當 linux
 //
-// 寫測鎖：
-//  1. Happy：GOOS=freebsd 正式 build 目標存在（Makefile 或 CI）；
-//     install.sh 在 FreeBSD（或模擬 uname=FreeBSD）必須解析到 freebsd
-//     二進位 URL，不得硬編碼 linux。
-//  2. 邊界：linux／amd64 本機安裝不回歸（#18）。
-//  3. 失敗：uname=FreeBSD 仍下 linux 包、或腳本直接拒絕／掛死 → 必須紅。
-//
-// 以碼為準（不要為了紅去改 production）：
-//  現 tip Makefile／CI 只有 linux；install.sh stage_binary／stage_gbctl
-//  硬編碼 gboard-node-linux-${ARCH}／gbctl-linux-${ARCH}。
-//  因此 Happy 與失敗鎖對現 tip 必須紅。現 tip 若已齊 → 回歸鎖綠。
+// 現 tip d15d962 只有 build-linux*，install.sh 硬綁 systemd＋
+// gboard-node-linux-${ARCH}。Happy 應紅。不要為了紅去改 production。
 
-func TestIssue62_FormalBuildMustHaveFreeBSDTarget(t *testing.T) {
+func TestIssue62_MakeBuildFreeBSDProducesFreeBSDArtifact(t *testing.T) {
 	root := issue62RepoRoot(t)
-	makefile := issue62Read(t, filepath.Join(root, "Makefile"))
-	workflows := issue62ReadWorkflows(t, root)
-
-	hits := issue62CollectFormalFreeBSD(makefile, workflows)
-	if len(hits) == 0 {
-		t.Fatalf("官方 #62：正式發布必須有 GOOS=freebsd 編譯目標（Makefile 如 build-freebsd／GOOS=freebsd，或 CI matrix goos: freebsd），產出 gboard-node-freebsd-*。現況只有 linux（Makefile build-linux／CI linux／amd64+arm64），不算修。")
+	out, err := issue62MakeNBuildFreeBSD(root, filepath.Join(root, "Makefile"))
+	if err != nil {
+		t.Fatalf("官方 #62 Happy：必須有 make build-freebsd，產出 gboard-node-freebsd-${ARCH}（GOOS=freebsd）。現況只有 build-linux*：\n%s\nerr=%v", out, err)
 	}
-	for _, h := range hits {
-		t.Logf("freebsd 正式目標：%s", h)
+	if !issue62HasGOOSFreeBSD(out) || !issue62HasFreeBSDArtifact(out) {
+		t.Fatalf("官方 #62 Happy：make build-freebsd 必須 GOOS=freebsd 且產出 gboard-node-freebsd-${ARCH}。got:\n%s", out)
 	}
+	t.Logf("make -n build-freebsd:\n%s", out)
 }
 
-func TestIssue62_InstallShOnFreeBSDMustResolveFreeBSDURL(t *testing.T) {
+func TestIssue62_InstallShOnFreeBSDTakesArtifactAndWritesRcd(t *testing.T) {
 	runIssue62Case(t, "happy")
 }
 
-func TestIssue62_LinuxAmd64NativeInstallMustNotRegress(t *testing.T) {
-	// 邊界：不要重做 #18 測檔；呼叫既有 Happy，再鎖 linux URL／Makefile linux 目標。
-	runIssue18Case(t, "happy")
+func TestIssue62_LinuxStillSystemdAndLinuxArtifact(t *testing.T) {
 	runIssue62Case(t, "boundary")
 }
 
-func TestIssue62_FreeBSDLinuxPackageOrRejectMustFail(t *testing.T) {
+func TestIssue62_UnknownOSOrMissingFreeBSDMustExplicitFail(t *testing.T) {
 	runIssue62Case(t, "fail")
 }
 
-func TestIssue62_CheckerFixturesAndFormalTargetLock(t *testing.T) {
-	// 回歸鎖：linux-only fixture 必須被打紅；已有 freebsd 的 fixture 必須綠。
-	// testdata 寫明：即使現 tip 以後補上 freebsd，拿掉時本測仍必須失敗。
+func TestIssue62_ATDDFixtures(t *testing.T) {
+	root := issue62RepoRoot(t)
 	dataDir := issue62TestdataDir(t)
 
-	linuxMake := issue62Read(t, filepath.Join(dataDir, "issue62_fixture_makefile_linux_only.mk"))
-	linuxCI := map[string]string{"linux-only.yml": issue62Read(t, filepath.Join(dataDir, "issue62_fixture_ci_linux_only.yml"))}
-	if hits := issue62CollectFormalFreeBSD(linuxMake, linuxCI); len(hits) != 0 {
-		t.Fatalf("linux-only fixture 不該被解析成已有 freebsd 目標：%v", hits)
+	linuxOnly := filepath.Join(dataDir, "issue62_fixture_makefile_linux_only.mk")
+	if out, err := issue62MakeNBuildFreeBSD(root, linuxOnly); err == nil {
+		t.Fatalf("linux-only fixture 不該有 make build-freebsd：\n%s", out)
 	}
 
-	okMake := issue62Read(t, filepath.Join(dataDir, "issue62_fixture_makefile_freebsd.mk"))
-	if hits := issue62CollectFormalFreeBSD(okMake, nil); len(hits) == 0 {
-		t.Fatal("已有 GOOS=freebsd 的 Makefile fixture 應被認作正式目標")
+	okMake := filepath.Join(dataDir, "issue62_fixture_makefile_freebsd.mk")
+	out, err := issue62MakeNBuildFreeBSD(root, okMake)
+	if err != nil {
+		t.Fatalf("freebsd fixture 的 make build-freebsd 應能 dry-run：\n%s\nerr=%v", out, err)
+	}
+	if !issue62HasGOOSFreeBSD(out) || !issue62HasFreeBSDArtifact(out) {
+		t.Fatalf("freebsd fixture 必須產出 gboard-node-freebsd-${ARCH}／GOOS=freebsd。got:\n%s", out)
 	}
 
-	okCI := map[string]string{"freebsd.yml": issue62Read(t, filepath.Join(dataDir, "issue62_fixture_ci_freebsd.yml"))}
-	if hits := issue62CollectFormalFreeBSD("# no makefile\n", okCI); len(hits) == 0 {
-		t.Fatal("已有 goos: freebsd 的 CI fixture 應被認作正式目標")
-	}
-
-	// 從正例拿掉 freebsd 必須再紅。
-	stripped := strings.ReplaceAll(okMake, "freebsd", "linux")
-	stripped = strings.ReplaceAll(stripped, "build-linux:", "build-linux-dup:")
-	if hits := issue62CollectFormalFreeBSD(stripped, nil); len(hits) != 0 {
-		t.Fatalf("回歸鎖失敗：從已齊 Makefile fixture 拿掉 freebsd 必須紅，got %v", hits)
-	}
+	runIssue62Case(t, "fixtures")
 }
 
 func issue62Script(t *testing.T) string {
@@ -109,26 +92,9 @@ func runIssue62Case(t *testing.T, name string) {
 	cmd.Dir = filepath.Dir(script)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("官方 #62 %s 鎖定測失敗（現況應為失敗測紅，或 freebsd 目標／自適應被拿掉）：\n%s\nerr=%v", name, out, err)
+		t.Fatalf("官方 #62 %s 鎖定測失敗（現況 Happy／失敗應紅；或 build-freebsd／rc.d／明示失敗被拿掉）：\n%s\nerr=%v", name, out, err)
 	}
 	t.Logf("%s", out)
-}
-
-func TestIssue62_SuiteFinishesWithinBudget(t *testing.T) {
-	start := time.Now()
-	// 不跑 all（含 fail／happy 對現 tip 會紅）；只鎖腳本本身不會卡死。
-	// hang fixture 最多 5s。這裡單獨跑 fixture 契約。
-	script := issue62Script(t)
-	cmd := exec.Command("bash", script, "fixtures")
-	cmd.Dir = filepath.Dir(script)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("官方 #62 fixture 契約失敗:\n%s\nerr=%v", out, err)
-	}
-	t.Logf("%s", out)
-	if elapsed := time.Since(start); elapsed > 20*time.Second {
-		t.Fatalf("issue62 fixture 整包過慢 (%s)，預檢不該接近卡死", elapsed)
-	}
 }
 
 func issue62RepoRoot(t *testing.T) string {
@@ -159,73 +125,31 @@ func issue62TestdataDir(t *testing.T) string {
 	return dir
 }
 
-func issue62Read(t *testing.T, path string) string {
-	t.Helper()
-	b, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-	return string(b)
-}
-
-func issue62ReadWorkflows(t *testing.T, root string) map[string]string {
-	t.Helper()
-	dir := filepath.Join(root, ".github", "workflows")
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("read workflows: %v", err)
-	}
-	out := map[string]string{}
-	for _, ent := range entries {
-		if ent.IsDir() {
-			continue
-		}
-		name := ent.Name()
-		if !strings.HasSuffix(name, ".yml") && !strings.HasSuffix(name, ".yaml") {
-			continue
-		}
-		out[name] = issue62Read(t, filepath.Join(dir, name))
-	}
-	return out
+func issue62MakeNBuildFreeBSD(dir, makefile string) (string, error) {
+	cmd := exec.Command("make", "-n", "-f", makefile, "build-freebsd")
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	return string(out), err
 }
 
 var (
 	issue62ReGOOS     = regexp.MustCompile(`(?i)(?:^|[\s"'=])GOOS=freebsd(?:[\s"']|$)`)
-	issue62ReYAMLGoos = regexp.MustCompile(`(?i)goos:\s*freebsd\b`)
-	issue62ReTarget   = regexp.MustCompile(`(?m)^build-freebsd(?:-[A-Za-z0-9]+)?\s*:`)
-	issue62ReArtifact = regexp.MustCompile(`(?i)(?:gboard-node|gbctl)-freebsd-[A-Za-z0-9]+`)
-	issue62ReMakeFB   = regexp.MustCompile(`(?i)make\s+build-freebsd(?:-[A-Za-z0-9]+)?\b`)
+	issue62ReArtifact = regexp.MustCompile(`gboard-node-freebsd-(\$\{?ARCH\}?|\$\(?ARCH\)?|[A-Za-z0-9_]+)`)
 )
 
-func issue62CollectFormalFreeBSD(makefile string, workflows map[string]string) []string {
-	var hits []string
-	hits = append(hits, issue62ScanFreeBSDSignals("Makefile", makefile)...)
-	for name, src := range workflows {
-		hits = append(hits, issue62ScanFreeBSDSignals(".github/workflows/"+name, src)...)
-	}
-	return hits
-}
-
-func issue62ScanFreeBSDSignals(source, src string) []string {
-	var hits []string
-	for i, line := range strings.Split(src, "\n") {
+func issue62HasGOOSFreeBSD(s string) bool {
+	for _, line := range strings.Split(s, "\n") {
 		trim := strings.TrimSpace(line)
 		if trim == "" || strings.HasPrefix(trim, "#") {
 			continue
 		}
-		n := strconv.Itoa(i + 1)
-		switch {
-		case issue62ReGOOS.MatchString(trim):
-			hits = append(hits, source+":"+n+": GOOS=freebsd")
-		case issue62ReYAMLGoos.MatchString(trim):
-			hits = append(hits, source+":"+n+": goos: freebsd")
-		case issue62ReTarget.MatchString(trim):
-			hits = append(hits, source+":"+n+": "+trim)
-		case issue62ReArtifact.MatchString(trim):
-			hits = append(hits, source+":"+n+": freebsd artifact")
-		case issue62ReMakeFB.MatchString(trim):
-			hits = append(hits, source+":"+n+": make build-freebsd")
+		if issue62ReGOOS.MatchString(trim) {
+			return true
 		}
 	}
-	return hits
+	return false
+}
+
+func issue62HasFreeBSDArtifact(s string) bool {
+	return issue62ReArtifact.MatchString(s)
 }

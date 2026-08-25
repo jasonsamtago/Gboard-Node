@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
-# 官方 cedar2025/Xboard-Node #62 — FreeBSD 編譯產物＋install.sh 自適應
-# https://github.com/cedar2025/Xboard-Node/issues/62
-# 審核 2：本輪只加鎖定測。不准改 production。
-# 範圍：編譯產物＋install.sh 自適應。不准擴大到真機服務／kernel／jail。
-# 不要重做 #18（本機 linux 安裝）；邊界只鎖不回歸。
+# 官方 cedar2025/Xboard-Node #62 — 審核2 ATDD 鎖定測
+# 限界：Makefile＋install.sh。編譯檔＝make build-freebsd → gboard-node-freebsd-${ARCH}
+# 自適應＝同一條 curl|bash 依 uname 選該成品＋寫 rc.d（不是 systemd）
+# 不做 ports/pkg、OpenBSD／macOS、核心移植、擴大發行面。
+# 本輪只加測，不准改 production。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 INSTALL_SH="${ROOT}/install.sh"
 MAKEFILE="${ROOT}/Makefile"
-CI_YML="${ROOT}/.github/workflows/ci.yml"
 DATA="$(cd "$(dirname "${BASH_SOURCE[0]}")/testdata" && pwd)"
 TIMEOUT_SECS=5
 CASE="${1:-all}"
@@ -17,6 +16,7 @@ CASE="${1:-all}"
 PASS=0
 FAIL=0
 RESOLVE_KIND=""
+RESOLVE_SERVICE=""
 RESOLVE_URLS=""
 RESOLVE_OUT=""
 RESOLVE_RC=""
@@ -61,7 +61,6 @@ write_fake_uname() {
     local dest="$1"
     local kernel="$2"
     local machine="$3"
-    # 先摘掉 link_essentials 的 uname symlink，避免 cat 寫穿系統 /usr/bin/uname
     rm -f "$dest/uname"
     cat >"$dest/uname" <<EOF
 #!/usr/bin/env bash
@@ -75,9 +74,12 @@ EOF
     chmod +x "$dest/uname"
 }
 
+# curl_mode=ok：任何 URL 都寫假二進位
+# curl_mode=freebsd_missing：含 freebsd 的 URL 回 404；linux 成功
 write_fake_curl() {
     local dest="$1"
     local log="$2"
+    local mode="${3:-ok}"
     cat >"$dest/curl" <<EOF
 #!/usr/bin/env bash
 out=""
@@ -98,6 +100,10 @@ while [ \$# -gt 0 ]; do
     esac
 done
 printf '%s\n' "\$url" >>$(printf '%q' "$log")
+if [ "$(printf '%q' "$mode")" = "freebsd_missing" ] && echo "\$url" | grep -q freebsd; then
+    echo "404 missing freebsd artifact: \$url" >&2
+    exit 1
+fi
 if [ -z "\$out" ]; then
     echo "fake-curl: missing -o" >&2
     exit 1
@@ -106,25 +112,6 @@ cat >"\$out" <<'FAKEBIN'
 #!/usr/bin/env bash
 if [ "\${1:-}" = "-v" ] || [ "\${1:-}" = "version" ]; then
     echo "gboard-node 0.0.0-issue62"
-    exit 0
-fi
-if [ "\${1:-}" = "config" ] && [ "\${2:-}" = "init" ]; then
-    output=""
-    creds=""
-    meta=""
-    while [ \$# -gt 0 ]; do
-        case "\$1" in
-            --output) output="\$2"; shift 2 ;;
-            --credentials-out) creds="\$2"; shift 2 ;;
-            --meta) meta="\$2"; shift 2 ;;
-            *) shift ;;
-        esac
-    done
-    [ -n "\$output" ] || exit 1
-    printf 'panel:\\n  url: https://panel.example.com\\n' >"\$output"
-    [ -n "\$creds" ] && printf 'TOKEN=TOKEN\\n' >"\$creds"
-    [ -n "\$meta" ] && printf '{}\\n' >"\$meta"
-    echo "INSTANCE_ID=issue62-freebsd"
     exit 0
 fi
 exit 0
@@ -150,19 +137,20 @@ run_timeout() {
     printf -v "$_rcvar" '%s' "$_rc"
 }
 
-# 對 script source 後走 detect_* ＋ stage_binary／stage_gbctl。
-# RESOLVE_KIND= freebsd | linux | reject | hang | mixed | other
+# RESOLVE_KIND= freebsd | linux | explicit | other
+# RESOLVE_SERVICE= rcd | systemd | none
 resolve_with_uname() {
     local script="$1"
     local kernel="$2"
     local machine="$3"
+    local curl_mode="${4:-ok}"
     local work minpath curl_log empty
     work="$(mktemp -d)"
     minpath="$work/bin"
     link_essentials "$minpath"
     write_fake_uname "$minpath" "$kernel" "$machine"
     curl_log="$work/curl.urls"
-    write_fake_curl "$minpath" "$curl_log"
+    write_fake_curl "$minpath" "$curl_log" "$curl_mode"
     empty="$work/cwd"
     mkdir -p "$empty"
     : >"$curl_log"
@@ -173,223 +161,236 @@ resolve_with_uname() {
         # shellcheck disable=SC1090
         source "$1"
         trap - ERR EXIT
-        for fn in detect_arch detect_os detect_goos detect_platform detect_kernel detect_os_family; do
+        for fn in detect_arch detect_os detect_goos detect_platform; do
             if declare -F "$fn" >/dev/null 2>&1; then
                 "$fn"
             fi
         done
         TMP_DIR="$(mktemp -d)"
+        export TMP_DIR
         if declare -F stage_binary >/dev/null 2>&1; then
             stage_binary
         fi
-        if declare -F stage_gbctl >/dev/null 2>&1; then
-            stage_gbctl
+        if declare -F render_service >/dev/null 2>&1; then
+            render_service
+        elif declare -F write_service_unit >/dev/null 2>&1; then
+            write_service_unit "${TMP_DIR}/${SERVICE_NAME:-gboard-node.service}"
         fi
         echo "RESOLVE_DOWNLOAD_URL=${DOWNLOAD_URL:-}"
         echo "RESOLVE_ARCH=${ARCH:-}"
         echo "RESOLVE_OS=${OS:-}"
+        echo "RESOLVE_SERVICE_PATH=${SERVICE_PATH:-}"
+        echo "RESOLVE_SERVICE_NAME=${SERVICE_NAME:-}"
+        if [ -n "${TMP_DIR:-}" ]; then
+            for f in "$TMP_DIR"/*; do
+                [ -f "$f" ] || continue
+                echo "RESOLVE_FILE=$(basename "$f")"
+                sed -n "1,20p" "$f" | sed "s/^/RESOLVE_FILEBODY /"
+            done
+        fi
     ' _ "$script" "$curl_log" "$empty"
 
     RESOLVE_URLS="$(cat "$curl_log" 2>/dev/null || true)"
     local blob
     blob="${RESOLVE_URLS}"$'\n'"${RESOLVE_OUT}"
-    if [ "$RESOLVE_RC" -eq 124 ] || [ "$RESOLVE_RC" -eq 137 ]; then
-        RESOLVE_KIND="hang"
-    elif [ "$RESOLVE_RC" -ne 0 ]; then
-        RESOLVE_KIND="reject"
-    elif echo "$blob" | grep -qiE 'gboard-node-freebsd-|gbctl-freebsd-'; then
-        if echo "$blob" | grep -qiE 'gboard-node-linux-|gbctl-linux-'; then
-            RESOLVE_KIND="mixed"
-        else
-            RESOLVE_KIND="freebsd"
-        fi
-    elif echo "$blob" | grep -qiE 'gboard-node-linux-|gbctl-linux-'; then
+
+    # 出現 gboard-node-linux-* ＝當 linux（含缺 freebsd 卻改拿 linux）
+    if echo "$blob" | grep -q 'gboard-node-linux-'; then
         RESOLVE_KIND="linux"
+    elif [ "$RESOLVE_RC" -ne 0 ]; then
+        RESOLVE_KIND="explicit"
+    elif echo "$blob" | grep -q 'gboard-node-freebsd-'; then
+        RESOLVE_KIND="freebsd"
     else
         RESOLVE_KIND="other"
     fi
+
+    if echo "$blob" | grep -q 'rc.d'; then
+        RESOLVE_SERVICE="rcd"
+    elif echo "$blob" | grep -qE 'rc\.subr|PROVIDE:|run_rc_command|rcvar='; then
+        RESOLVE_SERVICE="rcd"
+    elif echo "$blob" | grep -qE 'systemd|\[Unit\]'; then
+        RESOLVE_SERVICE="systemd"
+    else
+        RESOLVE_SERVICE="none"
+    fi
+
     rm -rf "$work"
 }
 
 # ---------------------------------------------------------------------------
-# ATDD-1 Happy：正式 freebsd 目標由 Go 測鎖；這裡鎖 install.sh 自適應 URL
+# ATDD-1 Happy：uname=FreeBSD 拿 gboard-node-freebsd-${ARCH} 並寫 rc.d
 # ---------------------------------------------------------------------------
 
-test_happy_freebsd_adaptive() {
-    echo "=== ATDD-1 Happy: uname=FreeBSD 必須解析到 freebsd 二進位 URL ==="
+test_happy_freebsd_artifact_and_rcd() {
+    echo "=== ATDD-1 Happy: uname=FreeBSD 拿 gboard-node-freebsd-\${ARCH} 並寫 rc.d ==="
 
-    if grep -Eq 'gboard-node-linux-\$\{ARCH\}|gbctl-linux-\$\{ARCH\}' "$INSTALL_SH" \
-        && ! grep -Eqi 'freebsd' "$INSTALL_SH"; then
-        fail "install.sh 下載硬編碼 *-linux-\${ARCH}（stage_binary／stage_gbctl），全文無 freebsd 自適應"
+    if ! grep -Eq 'gboard-node-freebsd-\$\{ARCH\}|gboard-node-freebsd-' "$INSTALL_SH"; then
+        fail "install.sh 沒有 gboard-node-freebsd-\${ARCH}（現況硬編碼 gboard-node-linux-\${ARCH}）"
     else
-        pass "靜態：install.sh 下載路徑能依 OS 變化（含 freebsd）"
+        pass "靜態：install.sh 會選 gboard-node-freebsd-\${ARCH}"
     fi
 
-    resolve_with_uname "$INSTALL_SH" "FreeBSD" "amd64"
-    echo "resolve kind=${RESOLVE_KIND} rc=${RESOLVE_RC}"
+    if ! grep -q 'rc.d' "$INSTALL_SH"; then
+        fail "install.sh 沒有 rc.d（現況硬綁 systemd）"
+    else
+        pass "靜態：install.sh 會寫 rc.d"
+    fi
+
+    resolve_with_uname "$INSTALL_SH" "FreeBSD" "amd64" ok
+    echo "kind=${RESOLVE_KIND} service=${RESOLVE_SERVICE} rc=${RESOLVE_RC}"
     echo "urls=${RESOLVE_URLS}"
     echo "out=${RESOLVE_OUT}"
 
-    case "$RESOLVE_KIND" in
-        hang)
-            fail "uname=FreeBSD 時 install.sh 掛死（${TIMEOUT_SECS}s）。out=${RESOLVE_OUT}"
-            ;;
-        reject)
-            fail "uname=FreeBSD 時 install.sh 直接拒絕 rc=${RESOLVE_RC}。out=${RESOLVE_OUT}"
-            ;;
-        linux)
-            fail "uname=FreeBSD 仍下 linux 包（硬編碼 gboard-node-linux-\${ARCH}）。urls=${RESOLVE_URLS} out=${RESOLVE_OUT}"
-            ;;
-        mixed)
-            fail "uname=FreeBSD 解析到混有 linux 的 URL。urls=${RESOLVE_URLS} out=${RESOLVE_OUT}"
-            ;;
-        freebsd)
-            pass "uname=FreeBSD 解析到 freebsd 二進位 URL（urls=${RESOLVE_URLS}）"
-            ;;
-        *)
-            fail "uname=FreeBSD 未解析到 freebsd 二進位 URL（kind=${RESOLVE_KIND}）。urls=${RESOLVE_URLS} out=${RESOLVE_OUT}"
-            ;;
-    esac
+    if [ "$RESOLVE_KIND" != "freebsd" ]; then
+        fail "uname=FreeBSD 必須拿 gboard-node-freebsd-\${ARCH}，不得當 linux（kind=${RESOLVE_KIND} urls=${RESOLVE_URLS}）"
+    else
+        pass "uname=FreeBSD 拿到 gboard-node-freebsd-\${ARCH}"
+    fi
+
+    if [ "$RESOLVE_SERVICE" != "rcd" ]; then
+        fail "uname=FreeBSD 必須寫 rc.d，不是 systemd（service=${RESOLVE_SERVICE} path 見 out）"
+    else
+        pass "uname=FreeBSD 寫入 rc.d"
+    fi
 }
 
 # ---------------------------------------------------------------------------
-# ATDD-2 邊界：linux／amd64 本機安裝不回歸（#18）
+# ATDD-2 邊界：Linux 仍走 systemd＋*-linux-*
 # ---------------------------------------------------------------------------
 
-test_boundary_linux_amd64() {
-    echo "=== ATDD-2 邊界: linux／amd64 本機安裝不回歸（#18） ==="
+test_boundary_linux_systemd() {
+    echo "=== ATDD-2 邊界: Linux 仍走 systemd＋*-linux-* ==="
 
-    if ! grep -Eq 'GOOS=linux' "$MAKEFILE"; then
-        fail "Makefile 失去 GOOS=linux 正式目標（#18／linux 發布回歸）"
+    if ! grep -Eq 'gboard-node-linux-\$\{ARCH\}|gboard-node-linux-' "$INSTALL_SH"; then
+        fail "install.sh 失去 *-linux-*（不准改 Linux 路徑）"
     else
-        pass "Makefile 仍有 GOOS=linux"
+        pass "install.sh 仍有 *-linux-*"
     fi
 
-    if ! grep -Eq 'build-linux' "$MAKEFILE"; then
-        fail "Makefile 失去 build-linux（linux／amd64 發布回歸）"
+    if ! grep -q 'systemd' "$INSTALL_SH"; then
+        fail "install.sh 失去 systemd（不准改 Linux 路徑）"
     else
-        pass "Makefile 仍有 build-linux"
+        pass "install.sh 仍有 systemd"
     fi
 
-    if [ -f "$CI_YML" ]; then
-        if ! grep -Eq 'goos:[[:space:]]*linux' "$CI_YML"; then
-            fail "CI 失去 linux 矩陣（linux／amd64 發布回歸）"
-        else
-            pass "CI 仍有 linux 矩陣"
-        fi
-    fi
-
-    resolve_with_uname "$INSTALL_SH" "Linux" "x86_64"
-    echo "linux resolve kind=${RESOLVE_KIND} rc=${RESOLVE_RC}"
+    resolve_with_uname "$INSTALL_SH" "Linux" "x86_64" ok
+    echo "linux kind=${RESOLVE_KIND} service=${RESOLVE_SERVICE} rc=${RESOLVE_RC}"
     echo "linux urls=${RESOLVE_URLS}"
 
-    case "$RESOLVE_KIND" in
-        hang)
-            fail "uname=Linux 時 install.sh 掛死。out=${RESOLVE_OUT}"
-            ;;
-        reject)
-            fail "uname=Linux 時 install.sh 拒絕（#18 回歸）。out=${RESOLVE_OUT}"
-            ;;
-        linux)
-            pass "uname=Linux／amd64 仍解析到 linux 二進位 URL（#18 不回歸）"
-            ;;
-        freebsd)
-            fail "uname=Linux 卻解析到 freebsd URL（linux 本機安裝回歸）。urls=${RESOLVE_URLS}"
-            ;;
-        *)
-            fail "uname=Linux 未解析到 linux 二進位 URL（kind=${RESOLVE_KIND}）。urls=${RESOLVE_URLS} out=${RESOLVE_OUT}"
-            ;;
-    esac
+    if [ "$RESOLVE_KIND" != "linux" ]; then
+        fail "uname=Linux 必須仍拿 *-linux-*（kind=${RESOLVE_KIND} urls=${RESOLVE_URLS}）"
+    else
+        pass "uname=Linux 仍拿 *-linux-*"
+    fi
+
+    if [ "$RESOLVE_SERVICE" != "systemd" ]; then
+        fail "uname=Linux 必須仍走 systemd（service=${RESOLVE_SERVICE}）"
+    else
+        pass "uname=Linux 仍走 systemd"
+    fi
 }
 
 # ---------------------------------------------------------------------------
-# ATDD-3 失敗：uname=FreeBSD 仍下 linux／拒絕／掛死 → 必須紅
+# ATDD-3 失敗：未知 OS／缺 freebsd 成品要明示失敗，不准當 linux
 # ---------------------------------------------------------------------------
 
-test_fail_freebsd_linux_or_reject() {
-    echo "=== ATDD-3 失敗: uname=FreeBSD 仍下 linux 包、或拒絕／掛死必須紅 ==="
+test_fail_unknown_or_missing_must_explicit() {
+    echo "=== ATDD-3 失敗: 未知 OS／缺 freebsd 成品必須明示失敗，不准當 linux ==="
 
-    resolve_with_uname "$INSTALL_SH" "FreeBSD" "amd64"
-    echo "current tip kind=${RESOLVE_KIND} rc=${RESOLVE_RC}"
-    echo "current tip urls=${RESOLVE_URLS}"
-    echo "current tip out=${RESOLVE_OUT}"
+    resolve_with_uname "$INSTALL_SH" "UnknownOS" "amd64" ok
+    echo "unknown kind=${RESOLVE_KIND} rc=${RESOLVE_RC} urls=${RESOLVE_URLS}"
+    echo "unknown out=${RESOLVE_OUT}"
+    if [ "$RESOLVE_KIND" = "linux" ]; then
+        fail "未知 OS 被當 linux（靜默拿 gboard-node-linux-\${ARCH}）。urls=${RESOLVE_URLS}"
+    elif [ "$RESOLVE_KIND" = "explicit" ]; then
+        pass "未知 OS 明示失敗（不准當 linux）"
+    else
+        fail "未知 OS 必須明示失敗，不准當 linux（kind=${RESOLVE_KIND} out=${RESOLVE_OUT}）"
+    fi
 
-    case "$RESOLVE_KIND" in
-        linux)
-            fail "現 tip：uname=FreeBSD 仍下 linux 包（stage_binary／stage_gbctl 硬編碼 *-linux-\${ARCH}）。urls=${RESOLVE_URLS}"
-            ;;
-        reject)
-            fail "現 tip：uname=FreeBSD 時腳本直接拒絕 rc=${RESOLVE_RC}。out=${RESOLVE_OUT}"
-            ;;
-        hang)
-            fail "現 tip：uname=FreeBSD 時腳本掛死。out=${RESOLVE_OUT}"
-            ;;
-        mixed)
-            fail "現 tip：uname=FreeBSD 仍混有 linux 包。urls=${RESOLVE_URLS}"
-            ;;
-        freebsd)
-            pass "現 tip：uname=FreeBSD 已解析到 freebsd URL（回歸鎖綠）"
-            ;;
-        *)
-            fail "現 tip：uname=FreeBSD 未自適應（kind=${RESOLVE_KIND}）。urls=${RESOLVE_URLS} out=${RESOLVE_OUT}"
-            ;;
-    esac
+    resolve_with_uname "$INSTALL_SH" "FreeBSD" "amd64" freebsd_missing
+    echo "missing kind=${RESOLVE_KIND} rc=${RESOLVE_RC} urls=${RESOLVE_URLS}"
+    echo "missing out=${RESOLVE_OUT}"
+    if [ "$RESOLVE_KIND" = "linux" ]; then
+        fail "缺 freebsd 成品卻當 linux（靜默改拿 gboard-node-linux-\${ARCH}）。urls=${RESOLVE_URLS}"
+    elif [ "$RESOLVE_KIND" = "explicit" ]; then
+        pass "缺 freebsd 成品明示失敗（不准當 linux）"
+    else
+        fail "缺 freebsd 成品必須明示失敗，不准當 linux（kind=${RESOLVE_KIND} out=${RESOLVE_OUT}）"
+    fi
 }
 
 # ---------------------------------------------------------------------------
-# fixture 契約：checker 能辨識硬編碼 linux／拒絕／掛死／自適應
+# fixture 契約：對齊 ATDD 檔名與 rc.d（正例綠、反例被辨識）
 # ---------------------------------------------------------------------------
 
 test_fixture_contracts() {
-    echo "=== fixture 契約: 反例必須被辨識；正例必須是 freebsd／linux ==="
+    echo "=== fixture 契約: ATDD 檔名／rc.d／明示失敗 ==="
 
-    resolve_with_uname "${DATA}/issue62_fixture_install_hardcode_linux.sh" "FreeBSD" "amd64"
+    resolve_with_uname "${DATA}/issue62_fixture_install_hardcode_linux.sh" "FreeBSD" "amd64" ok
+    if [ "$RESOLVE_KIND" = "linux" ] && [ "$RESOLVE_SERVICE" = "systemd" ]; then
+        pass "反例：硬編碼 linux＋systemd 被辨識"
+    else
+        fail "硬編碼夾具應為 linux＋systemd，got kind=${RESOLVE_KIND} service=${RESOLVE_SERVICE}"
+    fi
+
+    resolve_with_uname "${DATA}/issue62_fixture_install_unknown_as_linux.sh" "UnknownOS" "amd64" ok
     if [ "$RESOLVE_KIND" = "linux" ]; then
-        pass "反例夾具：硬編碼 linux 被辨識（kind=linux）"
+        pass "反例：未知 OS 當 linux 被辨識"
     else
-        fail "硬編碼 linux 夾具應為 kind=linux，got ${RESOLVE_KIND} out=${RESOLVE_OUT}"
+        fail "未知當 linux 夾具應為 kind=linux，got ${RESOLVE_KIND}"
     fi
 
-    resolve_with_uname "${DATA}/issue62_fixture_install_reject_freebsd.sh" "FreeBSD" "amd64"
-    if [ "$RESOLVE_KIND" = "reject" ]; then
-        pass "反例夾具：直接拒絕 FreeBSD 被辨識（kind=reject）"
-    else
-        fail "拒絕夾具應為 kind=reject，got ${RESOLVE_KIND} out=${RESOLVE_OUT}"
-    fi
-
-    resolve_with_uname "${DATA}/issue62_fixture_install_hang_freebsd.sh" "FreeBSD" "amd64"
-    if [ "$RESOLVE_KIND" = "hang" ]; then
-        pass "反例夾具：FreeBSD 掛死被 timeout 抓到（kind=hang）"
-    else
-        fail "掛死夾具應為 kind=hang，got ${RESOLVE_KIND} rc=${RESOLVE_RC} out=${RESOLVE_OUT}"
-    fi
-
-    resolve_with_uname "${DATA}/issue62_fixture_install_adaptive.sh" "FreeBSD" "amd64"
-    if [ "$RESOLVE_KIND" = "freebsd" ]; then
-        pass "正例夾具：uname=FreeBSD → freebsd URL"
-    else
-        fail "自適應夾具在 FreeBSD 應為 kind=freebsd，got ${RESOLVE_KIND} out=${RESOLVE_OUT}"
-    fi
-
-    resolve_with_uname "${DATA}/issue62_fixture_install_adaptive.sh" "Linux" "x86_64"
+    resolve_with_uname "${DATA}/issue62_fixture_install_missing_fallback_linux.sh" "FreeBSD" "amd64" freebsd_missing
     if [ "$RESOLVE_KIND" = "linux" ]; then
-        pass "正例夾具：uname=Linux → linux URL（#18 不回歸）"
+        pass "反例：缺 freebsd 成品改拿 linux 被辨識"
     else
-        fail "自適應夾具在 Linux 應為 kind=linux，got ${RESOLVE_KIND} out=${RESOLVE_OUT}"
+        fail "缺成品 fallback 夾具應為 kind=linux，got ${RESOLVE_KIND} urls=${RESOLVE_URLS} out=${RESOLVE_OUT}"
+    fi
+
+    resolve_with_uname "${DATA}/issue62_fixture_install_adaptive.sh" "FreeBSD" "amd64" ok
+    if [ "$RESOLVE_KIND" = "freebsd" ] && [ "$RESOLVE_SERVICE" = "rcd" ]; then
+        pass "正例：FreeBSD → gboard-node-freebsd-\${ARCH}＋rc.d"
+    else
+        fail "自適應夾具 FreeBSD 應為 freebsd＋rcd，got kind=${RESOLVE_KIND} service=${RESOLVE_SERVICE} out=${RESOLVE_OUT}"
+    fi
+
+    resolve_with_uname "${DATA}/issue62_fixture_install_adaptive.sh" "Linux" "x86_64" ok
+    if [ "$RESOLVE_KIND" = "linux" ] && [ "$RESOLVE_SERVICE" = "systemd" ]; then
+        pass "正例：Linux → systemd＋*-linux-*"
+    else
+        fail "自適應夾具 Linux 應為 linux＋systemd，got kind=${RESOLVE_KIND} service=${RESOLVE_SERVICE}"
+    fi
+
+    resolve_with_uname "${DATA}/issue62_fixture_install_adaptive.sh" "UnknownOS" "amd64" ok
+    if [ "$RESOLVE_KIND" = "explicit" ]; then
+        pass "正例：未知 OS 明示失敗"
+    else
+        fail "自適應夾具未知 OS 應明示失敗，got kind=${RESOLVE_KIND} out=${RESOLVE_OUT}"
+    fi
+
+    resolve_with_uname "${DATA}/issue62_fixture_install_adaptive.sh" "FreeBSD" "amd64" freebsd_missing
+    if [ "$RESOLVE_KIND" = "explicit" ]; then
+        pass "正例：缺 freebsd 成品明示失敗"
+    elif [ "$RESOLVE_KIND" = "linux" ]; then
+        fail "自適應夾具缺成品不准當 linux（got linux）"
+    else
+        fail "自適應夾具缺成品應明示失敗，got kind=${RESOLVE_KIND} out=${RESOLVE_OUT}"
     fi
 }
 
 # ---------------------------------------------------------------------------
 
 case "$CASE" in
-    happy) test_happy_freebsd_adaptive ;;
-    boundary) test_boundary_linux_amd64 ;;
-    fail) test_fail_freebsd_linux_or_reject ;;
+    happy) test_happy_freebsd_artifact_and_rcd ;;
+    boundary) test_boundary_linux_systemd ;;
+    fail) test_fail_unknown_or_missing_must_explicit ;;
     fixtures) test_fixture_contracts ;;
     all)
-        test_happy_freebsd_adaptive
-        test_boundary_linux_amd64
-        test_fail_freebsd_linux_or_reject
+        test_happy_freebsd_artifact_and_rcd
+        test_boundary_linux_systemd
+        test_fail_unknown_or_missing_must_explicit
         test_fixture_contracts
         ;;
     *)
