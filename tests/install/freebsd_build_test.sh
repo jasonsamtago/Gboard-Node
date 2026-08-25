@@ -61,6 +61,8 @@ write_fake_uname() {
     local dest="$1"
     local kernel="$2"
     local machine="$3"
+    # 先摘掉 link_essentials 的 uname symlink，避免 cat 寫穿系統 /usr/bin/uname
+    rm -f "$dest/uname"
     cat >"$dest/uname" <<EOF
 #!/usr/bin/env bash
 case "\${1:-}" in

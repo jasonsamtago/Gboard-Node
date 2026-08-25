@@ -57,4 +57,9 @@
 
 ## 本輪實測（dev d15d962，不改 production）
 
-見 `issue62_freebsd_build_note.txt`、`issue62_freebsd_build_go_test.txt`。
+- Happy：紅（失敗測成立）。Makefile／CI 無 `GOOS=freebsd`；`uname=FreeBSD` 仍下 `gboard-node-linux-amd64`／`gbctl-linux-amd64`（`stage_binary`／`stage_gbctl` 硬編碼；`detect_os` 讀到 ubuntu）
+- 邊界：綠。#18 本機 linux／amd64 不回歸；Makefile／CI 仍有 linux
+- 失敗：紅。現 tip 在 `uname=FreeBSD` 仍下 linux 包
+- fixture 契約：綠。硬編碼 linux／拒絕／掛死／自適應正例都能辨識
+- 詳見 `issue62_freebsd_build_go_test.txt`
+- 不准改 production；方向過再補 `GOOS=freebsd` 正式目標＋`install.sh` 依 `uname -s` 自適應 URL
