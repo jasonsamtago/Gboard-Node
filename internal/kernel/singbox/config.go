@@ -13,6 +13,7 @@ import (
 	"github.com/go-viper/mapstructure/v2"
 	"github.com/jasonsamtago/Gboard-Node/internal/config"
 	"github.com/jasonsamtago/Gboard-Node/internal/kernel"
+	"github.com/jasonsamtago/Gboard-Node/internal/kernel/singbox/ssinbound"
 	"github.com/jasonsamtago/Gboard-Node/internal/model"
 	"github.com/jasonsamtago/Gboard-Node/internal/nlog"
 )
@@ -952,11 +953,27 @@ func buildShadowsocks(base M, nc *model.NodeSpec, users []model.UserSpec) M {
 	}
 	base["users"] = userList
 
-	if nc.Plugin != "" {
-		nlog.Core().Warn("sing-box shadowsocks inbound does not support plugin, ignoring", "plugin", nc.Plugin)
-	}
+	applyShadowsocksPlugin(base, nc)
 
 	return base
+}
+
+// applyShadowsocksPlugin 把面板 plugin／opts 寫進 sing-box inbound。
+// v2ray-plugin／gost-plugin 另寫官方 transport（ws＋path＋host）；
+// 未知 plugin 仍寫欄位，起核時由 ssinbound 回明確錯誤，不准 ignoring。
+func applyShadowsocksPlugin(base M, nc *model.NodeSpec) {
+	if nc == nil || strings.TrimSpace(nc.Plugin) == "" {
+		return
+	}
+	base["plugin"] = nc.Plugin
+	if nc.PluginOpt != "" {
+		base["plugin_opts"] = nc.PluginOpt
+	}
+	transport, err := ssinbound.TransportMap(nc.Plugin, nc.PluginOpt)
+	if err != nil || transport == nil {
+		return
+	}
+	base["transport"] = transport
 }
 
 func buildVMess(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) M {
