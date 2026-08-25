@@ -224,7 +224,7 @@ func TestTrafficSplit_走錯outbound必須紅(t *testing.T) {
 		t.Fatalf("domain B 打到 outbound A 了：A.hits=%v B.hits=%v", markerA.hits(), markerB.hits())
 	}
 
-	unmatchedErr := issue17DialSSErr(t, spec.ServerPort, issue17Unmatched, issue17Ping)
+	_, unmatchedErr := issue17DialSSErr(t, spec.ServerPort, issue17Unmatched, issue17Ping)
 	if markerA.saw(issue17Unmatched) || markerB.saw(issue17Unmatched) {
 		t.Fatalf("未匹配域名不得打到分流 outbound（全部倒進 A／B 是假修）。A.hits=%v B.hits=%v unmatchedErr=%v",
 			markerA.hits(), markerB.hits(), unmatchedErr)
