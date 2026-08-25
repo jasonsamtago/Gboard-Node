@@ -44,3 +44,11 @@
 1. 本輪只加失敗測＋本規格
 2. 現 tip 已完整支援 → 測綠，標明回歸鎖（測仍會在忽略 SSH／不聽埠時紅）
 3. 未完整支援 → 必須紅；不准改 production、不准 skip、不准改切 xray、不准只改 WARN
+
+## 本輪實測（dev 205651a，不改 production）
+
+- sing-box：紅（失敗測成立）。Happy：`Protocols()` 無 ssh、`buildInbound` 回 nil、`Start` 成功但不聽埠。
+- 既有 VMess／SS／VLESS：綠（回歸鎖）。
+- private key 邊界：紅（inbound=null）。
+- 缺認證：紅（Start 成功、kernel 在跑）。
+- 詳見 `issue66_ssh_inbound_go_test_red.txt`

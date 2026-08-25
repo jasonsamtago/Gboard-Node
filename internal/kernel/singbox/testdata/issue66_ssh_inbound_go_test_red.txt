@@ -1,0 +1,36 @@
+# 官方 cedar2025/Xboard-Node #66 — 本輪 TDD 紅（不改 production）
+# 指令：go test ./internal/kernel/singbox/ -count=1 -timeout 180s -run 'Issue66'
+# 基底：dev tip 205651a（已含 PR #33 merge）
+# 日期：2026-08-25
+#
+# 現況：buildInbound 無 case "ssh"，default 回 nil；
+# buildConfig 省略 inbounds（連 WARN 都沒有）；
+# Protocols() 沒有 ssh；Start 成功、IsRunning=true、配置埠沒在聽。
+#
+# 預期：Happy／private key／缺認證紅；既有 VMess／SS／VLESS 綠（回歸）。
+
+--- FAIL: TestIssue66_SSH_MustBuildInboundListenAndHandshake
+    官方 #66：Protocols() 必須含 ssh，否則 validateNodeRuntime 會當不支援丟掉：
+        [vmess vless trojan shadowsocks hysteria hysteria2 tuic naive socks http anytls mieru]
+    官方 #66：buildConfig 必須帶 SSH inbound，不得因未知協議省略 inbounds（現況 buildInbound default 回 nil）
+    官方 #66：inbound 必須 type=ssh（或官方等價），不得靜默忽略／當未知丟掉：
+        null
+    官方 #66：Start 後配置埠必須真在聽，不准 process 活著卻不建 inbound running=true
+        DEBUG [core] sing-box config generated len=427
+        DEBUG [core] sing-box started users=1
+        inbound=null
+
+--- PASS: TestIssue66_ExistingVMessSSVLESS_MustStillHandshake
+    --- PASS: TestIssue66_ExistingVMessSSVLESS_MustStillHandshake/vless
+    --- PASS: TestIssue66_ExistingVMessSSVLESS_MustStillHandshake/vmess
+    --- PASS: TestIssue66_ExistingVMessSSVLESS_MustStillHandshake/shadowsocks
+
+--- FAIL: TestIssue66_SSH_PrivateKey_StillSSHInbound
+    帶 private key 的 SSH 仍須產出 inbound type=ssh，不得丟掉／當未知忽略：
+        null
+
+--- FAIL: TestIssue66_SSH_MissingAuth_MustErrorNotSilent
+    官方 #66：缺 user／password／private key 起核必須回明確錯誤，不得 Start 成功當空核
+    拒絕缺認證後核不得當成功在跑（Start 成功但不聽／空 inbound 不算修）
+
+FAIL	github.com/jasonsamtago/Gboard-Node/internal/kernel/singbox
