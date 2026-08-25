@@ -1,0 +1,27 @@
+# 官方 cedar2025/Xboard-Node #17 — 本輪 TDD（不改 production）
+# 指令：
+#   go test ./internal/kernel/singbox -count=1 -timeout 180s -run 'TestTrafficSplit_'
+# 基底：dev tip f37e453（已含 PR #34 merge；含官方 #14 rule_set）
+# 日期：2026-08-25
+#
+# 結果：綠（回歸鎖／防回歸）。PASS=5 FAIL=0
+# 現況已綠、當回歸鎖；官方指 #14。
+#
+# 以碼為準（不是修補）：
+# - buildRoutes 吃 CustomRouteRules／CustomRoutes；#14 splitCustomRouteRuleSet
+#   把定義抬到 route.rule_set，rules 只留 tag＋outbound
+# - 結構化 custom_route_rules 編成 domain＋outbound
+# - 面板 custom_outbounds（socks）可當分流目標；SS 客戶端打中對應 marker
+# - 未匹配域名走 final/direct（NXDOMAIN），不會倒進分流 outbound
+# - 測仍會在「丟掉 rules／rule_set 不上／只 WARN／走錯 outbound」時紅
+#
+# 不准改 production；不要重開 #14 實作。建議合測即可。
+
+======== sing-box（回歸鎖綠）========
+--- PASS: TestTrafficSplit_面板rule_set必須進config並走對outbound
+--- PASS: TestTrafficSplit_無自訂路由普通節點不回歸
+--- PASS: TestTrafficSplit_rules被丟或只WARN必須紅
+--- PASS: TestTrafficSplit_結構化custom_route_rules仍須分流
+--- PASS: TestTrafficSplit_走錯outbound必須紅
+    unmatched → outbound/direct[direct] lookup NXDOMAIN（證明沒倒進 split-a／split-b）
+ok  	github.com/jasonsamtago/Gboard-Node/internal/kernel/singbox	0.033s
