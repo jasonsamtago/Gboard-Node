@@ -1,0 +1,8 @@
+# 官方 #48 反例：正式 Dockerfile 漏 -s -w（測必須紅）
+# testdata 寫明：現 tip 已有 -s -w 時，拿掉仍必須被本測打紅。
+FROM golang:1.26-alpine AS builder
+WORKDIR /build
+COPY . .
+RUN CGO_ENABLED=0 go build -ldflags "-X main.version=dev" -o gboard-node ./cmd/gboard-node
+FROM alpine:3.20
+COPY --from=builder /build/gboard-node /usr/local/bin/gboard-node
