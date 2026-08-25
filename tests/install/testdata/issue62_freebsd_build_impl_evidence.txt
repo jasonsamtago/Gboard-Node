@@ -1,0 +1,78 @@
+# 官方 cedar2025/Xboard-Node #62 — 實作輪證據（交叉編譯＋mocked install）
+# 日期：2026-08-25
+# SHA：755d07c66b0beed9d2f2d742e2e67d3217fcd88e
+# 分支：cursor/freebsd-compile-failing-test-0b2e（base dev d15d962）
+# Go：go1.26.7 linux/amd64
+#
+# 證明範圍：只改 Makefile＋install.sh。
+#   make build-freebsd 產出 ELF，file／go version -m 見 GOOS=freebsd、-trimpath=true
+#   mocked install：uname=FreeBSD 拿 freebsd 成品並寫 rc.d；未知 OS 明示失敗
+# 未改 CI 矩陣、未加 ports/pkg、未跑 FreeBSD 真機。
+
+======== 1. make -n build-freebsd（必須含 GOOS=freebsd、-trimpath、-ldflags -s -w）========
+CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=755d07c -X main.buildTime=2026-08-25T12:18:46Z -X main.commit=755d07c" -tags "with_quic with_utls with_wireguard with_acme with_clash_api" -o gboard-node-freebsd-amd64 ./cmd/gboard-node
+CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=755d07c -X main.buildTime=2026-08-25T12:18:46Z -X main.commit=755d07c" -o gbctl-freebsd-amd64 ./cmd/gbctl
+
+======== 2. 實際 make build-freebsd（交叉編譯產出 ELF）========
+# 指令與 -n 一致。未改 CI 矩陣；本機交叉編即可。
+
+======== 3. file（FreeBSD ELF、stripped）========
+gboard-node-freebsd-amd64: ELF 64-bit LSB executable, x86-64, version 1 (FreeBSD), statically linked, Go BuildID=lfJoPqGJqQPitpg5I8l_/SRm-xPKn_zX2jisL3RVh/pvrGobcReiwAFXtonOkh/ychjKyjsqyxzzz_9N5gA, BuildID[sha1]=e0514eeb1ffe84d2545135f5fed5d2a65b8a3bd2, for FreeBSD 12.3, FreeBSD-style, stripped
+gbctl-freebsd-amd64:       ELF 64-bit LSB executable, x86-64, version 1 (FreeBSD), statically linked, Go BuildID=GxLZLrNM_ClYprTsAhyN/BPzc4z3YgbWpms_hBvcs/fLfBIAQb0OOYtH66h7r4/HlPM0MbYEq_k3yPv7imr, BuildID[sha1]=dbef4f39a97e0d9216f98f1246b081a387d43188, for FreeBSD 12.3, FreeBSD-style, stripped
+
+======== 4. go version -m（關鍵列：GOOS=freebsd、-trimpath=true）========
+gboard-node-freebsd-amd64: go1.26.7
+	path	github.com/jasonsamtago/Gboard-Node/cmd/gboard-node
+	mod	github.com/jasonsamtago/Gboard-Node	v0.0.0-20260825121700-755d07c66b0b
+	build	-buildmode=exe
+	build	-compiler=gc
+	build	-tags=with_quic,with_utls,with_wireguard,with_acme,with_clash_api
+	build	-trimpath=true
+	build	CGO_ENABLED=0
+	build	GOARCH=amd64
+	build	GOOS=freebsd
+	build	GOAMD64=v1
+	build	vcs=git
+	build	vcs.revision=755d07c66b0beed9d2f2d742e2e67d3217fcd88e
+	build	vcs.time=2026-08-25T12:17:00Z
+	build	vcs.modified=false
+
+gbctl-freebsd-amd64: go1.26.7
+	path	github.com/jasonsamtago/Gboard-Node/cmd/gbctl
+	build	-trimpath=true
+	build	CGO_ENABLED=0
+	build	GOARCH=amd64
+	build	GOOS=freebsd
+
+======== 5. mocked install（uname=FreeBSD → freebsd 成品＋rc.d，不寫 systemd）========
+# bash tests/install/freebsd_build_test.sh happy
+kind=freebsd service=rcd rc=0
+urls=https://github.com/jasonsamtago/Gboard-Node/releases/download/dev/gboard-node-freebsd-amd64
+RESOLVE_DOWNLOAD_URL=https://github.com/jasonsamtago/Gboard-Node/releases/download/dev/gboard-node-freebsd-amd64
+RESOLVE_OS=freebsd
+RESOLVE_SERVICE_PATH=/usr/local/etc/rc.d/gboard-node
+RESOLVE_FILE=gboard-node.rcd
+RESOLVE_FILEBODY # PROVIDE: gboard_node
+RESOLVE_FILEBODY . /etc/rc.subr
+RESOLVE_FILEBODY rcvar="gboard_node_enable"
+RESOLVE_FILEBODY run_rc_command "$1"
+# 無 [Unit]、無 systemd unit。PASS=4 FAIL=0
+
+======== 6. mocked install（未知 OS／缺成品明示失敗，不准當 linux）========
+# unknown：
+unknown kind=explicit rc=1 urls=
+unknown out=[ERROR] Unsupported OS: UnknownOS (will not treat as linux)
+# missing freebsd artifact：
+missing kind=explicit rc=1
+urls=https://github.com/jasonsamtago/Gboard-Node/releases/download/dev/gboard-node-freebsd-amd64
+# 兩者都沒有改拿 gboard-node-linux-*。PASS
+
+======== 7. Linux 邊界（路徑不動）========
+linux kind=linux service=systemd rc=0
+linux urls=https://github.com/jasonsamtago/Gboard-Node/releases/download/dev/gboard-node-linux-amd64
+# 仍 systemd＋*-linux-*。PASS
+
+======== 8. 測摘要 ========
+# go test ./tests/install -v -count=1 -timeout 60s -run 'TestIssue62_'
+# 全綠。詳見 issue62_freebsd_build_impl_go_test.txt
+# mocked 整包：issue62 summary: PASS=17 FAIL=0

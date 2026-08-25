@@ -1,0 +1,72 @@
+# 官方 cedar2025/Xboard-Node #62 — 實作輪測綠
+# 指令：
+#   go test ./tests/install -v -count=1 -timeout 60s -run 'TestIssue62_'
+# 基底：cursor/freebsd-compile-failing-test-0b2e tip 755d07c（base dev d15d962）
+# 日期：2026-08-25
+#
+# 結果：全綠。Happy／邊界／失敗／fixture 契約皆 PASS。
+# Happy：make build-freebsd 產出 gboard-node-freebsd-${ARCH}（GOOS=freebsd）；
+#        uname=FreeBSD 拿該成品並寫 rc.d
+# 邊界：Linux 仍走 systemd＋*-linux-*
+# 失敗：未知 OS／缺 freebsd 成品明示失敗，不准當 linux
+#
+# 生產檔只改 Makefile＋install.sh。不准 skip、不准改測來假綠。
+# 不做 ports/pkg、OpenBSD／macOS、核心移植、改 CI 矩陣。
+
+======== issue62（實作後全綠）========
+=== RUN   TestIssue62_MakeBuildFreeBSDProducesFreeBSDArtifact
+    freebsd_build_test.go:39: make -n build-freebsd:
+        CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=755d07c -X main.buildTime=2026-08-25T12:17:37Z -X main.commit=755d07c" -tags "with_quic with_utls with_wireguard with_acme with_clash_api" -o gboard-node-freebsd-amd64 ./cmd/gboard-node
+        CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=755d07c -X main.buildTime=2026-08-25T12:17:37Z -X main.commit=755d07c" -o gbctl-freebsd-amd64 ./cmd/gbctl
+--- PASS: TestIssue62_MakeBuildFreeBSDProducesFreeBSDArtifact (0.01s)
+=== RUN   TestIssue62_InstallShOnFreeBSDTakesArtifactAndWritesRcd
+    freebsd_build_test.go:43: === ATDD-1 Happy: uname=FreeBSD 拿 gboard-node-freebsd-${ARCH} 並寫 rc.d ===
+        PASS: 靜態：install.sh 會選 gboard-node-freebsd-${ARCH}
+        PASS: 靜態：install.sh 會寫 rc.d
+        kind=freebsd service=rcd rc=0
+        urls=https://github.com/jasonsamtago/Gboard-Node/releases/download/dev/gboard-node-freebsd-amd64
+        RESOLVE_DOWNLOAD_URL=https://github.com/jasonsamtago/Gboard-Node/releases/download/dev/gboard-node-freebsd-amd64
+        RESOLVE_ARCH=amd64
+        RESOLVE_OS=freebsd
+        RESOLVE_SERVICE_PATH=/usr/local/etc/rc.d/gboard-node
+        RESOLVE_SERVICE_NAME=gboard-node
+        PASS: uname=FreeBSD 拿到 gboard-node-freebsd-${ARCH}
+        PASS: uname=FreeBSD 寫入 rc.d
+
+        issue62 summary: PASS=4 FAIL=0
+--- PASS: TestIssue62_InstallShOnFreeBSDTakesArtifactAndWritesRcd (0.07s)
+=== RUN   TestIssue62_LinuxStillSystemdAndLinuxArtifact
+    freebsd_build_test.go:47: === ATDD-2 邊界: Linux 仍走 systemd＋*-linux-* ===
+        PASS: install.sh 仍有 *-linux-*
+        PASS: install.sh 仍有 systemd
+        linux kind=linux service=systemd rc=0
+        linux urls=https://github.com/jasonsamtago/Gboard-Node/releases/download/dev/gboard-node-linux-amd64
+        PASS: uname=Linux 仍拿 *-linux-*
+        PASS: uname=Linux 仍走 systemd
+
+        issue62 summary: PASS=4 FAIL=0
+--- PASS: TestIssue62_LinuxStillSystemdAndLinuxArtifact (0.07s)
+=== RUN   TestIssue62_UnknownOSOrMissingFreeBSDMustExplicitFail
+    freebsd_build_test.go:51: === ATDD-3 失敗: 未知 OS／缺 freebsd 成品必須明示失敗，不准當 linux ===
+        unknown kind=explicit rc=1 urls=
+        unknown out=[ERROR] Unsupported OS: UnknownOS (will not treat as linux)
+        PASS: 未知 OS 明示失敗（不准當 linux）
+        missing kind=explicit rc=1 urls=https://github.com/jasonsamtago/Gboard-Node/releases/download/dev/gboard-node-freebsd-amd64
+        PASS: 缺 freebsd 成品明示失敗（不准當 linux）
+
+        issue62 summary: PASS=2 FAIL=0
+--- PASS: TestIssue62_UnknownOSOrMissingFreeBSDMustExplicitFail (0.11s)
+=== RUN   TestIssue62_ATDDFixtures
+    freebsd_build_test.go:72: === fixture 契約: ATDD 檔名／rc.d／明示失敗 ===
+        PASS: 反例：硬編碼 linux＋systemd 被辨識
+        PASS: 反例：未知 OS 當 linux 被辨識
+        PASS: 反例：缺 freebsd 成品改拿 linux 被辨識
+        PASS: 正例：FreeBSD → gboard-node-freebsd-${ARCH}＋rc.d
+        PASS: 正例：Linux → systemd＋*-linux-*
+        PASS: 正例：未知 OS 明示失敗
+        PASS: 正例：缺 freebsd 成品明示失敗
+
+        issue62 summary: PASS=7 FAIL=0
+--- PASS: TestIssue62_ATDDFixtures (0.41s)
+PASS
+ok  	github.com/jasonsamtago/Gboard-Node/tests/install	0.659s
