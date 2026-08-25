@@ -6,18 +6,18 @@ LDFLAGS := -s -w -X main.version=$(VERSION) -X main.buildTime=$(BUILD_TIME) -X m
 
 # Build for current platform
 build:
-	go build -ldflags "$(LDFLAGS)" -tags "with_quic with_utls with_wireguard with_clash_api" -o gboard-node ./cmd/gboard-node
-	go build -ldflags "$(LDFLAGS)" -o gbctl ./cmd/gbctl
+	go build -trimpath -ldflags "$(LDFLAGS)" -tags "with_quic with_utls with_wireguard with_clash_api" -o gboard-node ./cmd/gboard-node
+	go build -trimpath -ldflags "$(LDFLAGS)" -o gbctl ./cmd/gbctl
 
 # Build for Linux amd64
 build-linux:
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -tags "with_quic with_utls with_wireguard with_acme with_clash_api" -o gboard-node-linux-amd64 ./cmd/gboard-node
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o gbctl-linux-amd64 ./cmd/gbctl
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -tags "with_quic with_utls with_wireguard with_acme with_clash_api" -o gboard-node-linux-amd64 ./cmd/gboard-node
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o gbctl-linux-amd64 ./cmd/gbctl
 
 # Build for Linux arm64
 build-linux-arm64:
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -tags "with_quic with_utls with_wireguard with_acme with_clash_api" -o gboard-node-linux-arm64 ./cmd/gboard-node
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -o gbctl-linux-arm64 ./cmd/gbctl
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "$(LDFLAGS)" -tags "with_quic with_utls with_wireguard with_acme with_clash_api" -o gboard-node-linux-arm64 ./cmd/gboard-node
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "$(LDFLAGS)" -o gbctl-linux-arm64 ./cmd/gbctl
 
 # Build all platforms
 build-all: build-linux build-linux-arm64
