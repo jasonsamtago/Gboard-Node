@@ -1,0 +1,47 @@
+# 官方 cedar2025/Xboard-Node #31 — 本輪 TDD（不改 production）
+# 指令：
+#   go test ./internal/kernel/singbox/ -count=1 -timeout 90s -run 'Issue31'
+#   go test ./internal/kernel/xray/ -count=1 -timeout 90s -run 'Issue31'
+# 基底：dev tip 67bd02d（已含 PR #32 merge）
+# 日期：2026-08-25
+#
+# 結果：
+# - sing-box：綠（回歸鎖／防回歸）。PASS=4 FAIL=0
+# - xray：紅。Happy／空 host／httpupgrade+h2 冒充 FAIL；普通 TCP PASS
+#
+# 現況（以碼為準）：
+# - sing-box applyTransport：network=http／h2 都寫 transport.type=http，抄扁平 path／host。
+#   buildVMess 有呼叫 applyTransport；Start＋VMess+HTTP 客戶端握手已通。
+#   測仍會在「丟 HTTP／降 TCP／改 httpupgrade」時紅。
+# - xray applyStreamSettings case "h2","http"：把 network 改寫成 h2，再寫 httpSettings。
+#   xray-core 26.3.27 已移除 HTTP transport（改走 XHTTP stream-one H2 & H3），
+#   Start 直接 parse 失敗。h2 冒充這個 HTTP＝未完成。
+#
+# 不准改 production；方向過了再實作 xray（XHTTP 或保留真 HTTP）。
+
+======== sing-box（回歸鎖綠）========
+--- PASS: TestIssue31_VMessHTTP_MustKeepTransportAndHandshake
+--- PASS: TestIssue31_VMessTCP_Plain_MustStillHandshake
+--- PASS: TestIssue31_VMessHTTP_EmptyHost_StillHTTPTransport
+--- PASS: TestIssue31_HttpUpgradeAndH2MustNotImpersonateHTTP
+    httpupgrade inbound 對 VMess+HTTP 客戶端回 404／bad method: PUT（不可冒充）
+ok  	github.com/jasonsamtago/Gboard-Node/internal/kernel/singbox
+
+======== xray（紅）========
+--- FAIL: TestIssue31_VMessHTTP_MustKeepTransportAndHandshake
+    官方 #31：xray VMess streamSettings 必須真帶 HTTP（network=http＋httpSettings＋host／path），不得只剩 raw TCP／改寫成 h2 冒充／丟掉 host path：
+        streamSettings.network=h2  httpSettings.path=/vmesshttp host=["cdn.issue31.test"]
+    官方 #31：h2 不可冒充成這個 HTTP（applyStreamSettings 把 http 改寫成 h2）
+    官方 #31：vmess+http 必須能起 xray 核:
+        parse xray config: The feature HTTP transport (without header padding, etc.) has been removed and migrated to XHTTP stream-one H2 & H3.
+
+--- PASS: TestIssue31_VMessTCP_Plain_MustStillHandshake
+
+--- FAIL: TestIssue31_VMessHTTP_EmptyHost_StillHTTPTransport
+    空 host 仍須帶 HTTP network，got network=h2
+
+--- FAIL: TestIssue31_HttpUpgradeAndH2MustNotImpersonateHTTP
+    官方 #31：h2 不可冒充成這個 HTTP（http 被改寫成 h2）
+    （httpupgrade 節點起核成功；VMess+HTTP 客戶端打上去連不上，此段符合契約）
+
+FAIL	github.com/jasonsamtago/Gboard-Node/internal/kernel/xray

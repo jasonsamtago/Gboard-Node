@@ -43,3 +43,9 @@
 1. 本輪只加失敗測＋本規格
 2. 現 tip 已完整支援 → 測綠，標明回歸鎖（測仍會在丟 HTTP／降 TCP 時紅）
 3. 未完整支援 → 必須紅；不准改 production、不准 skip、不准改切 xray、不准把 HTTP 當不支援忽略
+
+## 本輪實測（dev 67bd02d，不改 production）
+
+- sing-box：綠（回歸鎖）。Happy 握手通；空 host 仍是 type=http；httpupgrade 對 HTTP 客戶端回 404。
+- xray：紅。`applyStreamSettings` 把 `http` 改寫成 `h2`；xray-core 26.3.27 已移除 HTTP transport（改走 XHTTP），Start 失敗。
+- 詳見 `issue31_vmess_http_go_test_red.txt`

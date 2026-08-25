@@ -1,7 +1,8 @@
 package xray
 
 import (
-	"bytes"
+	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,8 +14,10 @@ import (
 	"testing"
 	"time"
 
-	xrayCore "github.com/xtls/xray-core/core"
-	"github.com/xtls/xray-core/infra/conf/serial"
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-box/option"
+	singJSON "github.com/sagernet/sing/common/json"
 
 	"github.com/jasonsamtago/Gboard-Node/internal/config"
 	"github.com/jasonsamtago/Gboard-Node/internal/kernel"
@@ -184,7 +187,7 @@ func TestIssue31_HttpUpgradeAndH2MustNotImpersonateHTTP(t *testing.T) {
 	}
 	defer k.Stop()
 
-	if err := handshakeIssue31VMessHTTP(t, upgradeSpec.ServerPort, dest, issue31Host, issue31Path); err == nil {
+	if err := handshakeIssue31VMessHTTPFastFail(t, upgradeSpec.ServerPort, dest, issue31Host, issue31Path); err == nil {
 		t.Fatal("官方 #31：VMess+HTTP 客戶端打 httpupgrade inbound 必須連不上（httpupgrade 不可冒充成這個 HTTP）")
 	}
 
@@ -369,28 +372,39 @@ func startIssue31Dest(t *testing.T) (net.Listener, *net.TCPAddr) {
 
 func handshakeIssue31VMessHTTP(t *testing.T, nodePort int, dest *net.TCPAddr, host, path string) error {
 	t.Helper()
-	return issue31DownloadViaXray(t, issue31HTTPClientConfig(nodePort, dest.Port, host, path))
+	return issue31DownloadViaSingBox(t, dest, issue31HTTPClientConfig(nodePort, host, path), 6*time.Second)
+}
+
+func handshakeIssue31VMessHTTPFastFail(t *testing.T, nodePort int, dest *net.TCPAddr, host, path string) error {
+	t.Helper()
+	return issue31DownloadViaSingBox(t, dest, issue31HTTPClientConfig(nodePort, host, path), 1500*time.Millisecond)
 }
 
 func handshakeIssue31VMessTCP(t *testing.T, nodePort int, dest *net.TCPAddr) error {
 	t.Helper()
-	return issue31DownloadViaXray(t, issue31TCPClientConfig(nodePort, dest.Port))
+	return issue31DownloadViaSingBox(t, dest, issue31TCPClientConfig(nodePort), 6*time.Second)
 }
 
-func issue31DownloadViaXray(t *testing.T, cfg map[string]any) error {
+func issue31DownloadViaSingBox(t *testing.T, dest *net.TCPAddr, cfg M, wait time.Duration) error {
 	t.Helper()
 	clientPort := freeTCPPort(t)
-	inbounds, _ := cfg["inbounds"].([]map[string]any)
+	inbounds, _ := cfg["inbounds"].([]M)
 	if len(inbounds) > 0 {
-		inbounds[0]["port"] = clientPort
+		inbounds[0]["listen_port"] = clientPort
 	}
-	stop := startIssue31XrayClient(t, cfg)
+	stop, err := startIssue31SingBoxClient(cfg)
+	if err != nil {
+		return err
+	}
 	defer stop()
+	if err := issue31WaitListen(fmt.Sprintf("127.0.0.1:%d", clientPort)); err != nil {
+		return err
+	}
 
 	var last error
-	deadline := time.Now().Add(6 * time.Second)
+	deadline := time.Now().Add(wait)
 	for time.Now().Before(deadline) {
-		conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", clientPort), 300*time.Millisecond)
+		conn, err := issue31SOCKS5Dial(fmt.Sprintf("127.0.0.1:%d", clientPort), dest)
 		if err != nil {
 			last = err
 			time.Sleep(50 * time.Millisecond)
@@ -422,98 +436,137 @@ func issue31DownloadViaXray(t *testing.T, cfg map[string]any) error {
 	return last
 }
 
-func startIssue31XrayClient(t *testing.T, cfg map[string]any) func() {
-	t.Helper()
+func startIssue31SingBoxClient(cfg M) (func(), error) {
 	data, err := json.Marshal(cfg)
 	if err != nil {
-		t.Fatalf("marshal client config: %v", err)
+		return nil, fmt.Errorf("marshal client config: %w", err)
 	}
-	pb, err := serial.LoadJSONConfig(bytes.NewReader(data))
+	ctx, cancel := context.WithCancel(include.Context(context.Background()))
+	opts, err := singJSON.UnmarshalExtendedContext[option.Options](ctx, data)
 	if err != nil {
-		t.Fatalf("parse client config: %v\n%s", err, data)
+		cancel()
+		return nil, fmt.Errorf("parse client sing-box: %w\n%s", err, data)
 	}
-	inst, err := xrayCore.New(pb)
+	inst, err := box.New(box.Options{Context: ctx, Options: opts})
 	if err != nil {
-		t.Fatalf("create client xray: %v", err)
+		cancel()
+		return nil, fmt.Errorf("create client sing-box: %w", err)
 	}
 	if err := inst.Start(); err != nil {
 		inst.Close()
-		t.Fatalf("start client xray: %v", err)
+		cancel()
+		return nil, fmt.Errorf("start client sing-box: %w", err)
 	}
-	return func() { _ = inst.Close() }
+	return func() {
+		_ = inst.Close()
+		cancel()
+	}, nil
 }
 
-func issue31HTTPClientConfig(nodePort, destPort int, host, path string) map[string]any {
-	httpSettings := map[string]any{"path": path}
+// 客戶端用 sing-box VMess+HTTP。xray-core 26 已移除 HTTP transport（改走 XHTTP），
+// 不能再拿 network=http 當客戶端來躲測。
+func issue31HTTPClientConfig(nodePort int, host, path string) M {
+	transport := M{"type": "http", "path": path}
 	if host != "" {
-		httpSettings["host"] = []any{host}
+		transport["host"] = []string{host}
 	}
-	return map[string]any{
-		"log": map[string]any{"loglevel": "warning"},
-		"inbounds": []map[string]any{{
-			"listen":   "127.0.0.1",
-			"port":     0,
-			"protocol": "dokodemo-door",
-			"settings": map[string]any{
-				"address": "127.0.0.1",
-				"port":    destPort,
-				"network": "tcp",
-			},
+	return M{
+		"log": M{"level": "warn"},
+		"inbounds": []M{{
+			"type":        "mixed",
+			"tag":         "client-in",
+			"listen":      "127.0.0.1",
+			"listen_port": 0,
 		}},
-		"outbounds": []map[string]any{{
-			"protocol": "vmess",
-			"settings": map[string]any{
-				"vnext": []map[string]any{{
-					"address": "127.0.0.1",
-					"port":    nodePort,
-					"users": []map[string]any{{
-						"id":       issue31UserUUID,
-						"alterId":  0,
-						"security": "auto",
-					}},
-				}},
-			},
-			"streamSettings": map[string]any{
-				"network":      "http",
-				"security":     "none",
-				"httpSettings": httpSettings,
-			},
+		"outbounds": []M{{
+			"type":        "vmess",
+			"tag":         "vmess-http",
+			"server":      "127.0.0.1",
+			"server_port": nodePort,
+			"uuid":        issue31UserUUID,
+			"security":    "auto",
+			"transport":   transport,
 		}},
+		"route": M{"final": "vmess-http"},
 	}
 }
 
-func issue31TCPClientConfig(nodePort, destPort int) map[string]any {
-	return map[string]any{
-		"log": map[string]any{"loglevel": "warning"},
-		"inbounds": []map[string]any{{
-			"listen":   "127.0.0.1",
-			"port":     0,
-			"protocol": "dokodemo-door",
-			"settings": map[string]any{
-				"address": "127.0.0.1",
-				"port":    destPort,
-				"network": "tcp",
-			},
+func issue31TCPClientConfig(nodePort int) M {
+	return M{
+		"log": M{"level": "warn"},
+		"inbounds": []M{{
+			"type":        "mixed",
+			"tag":         "client-in",
+			"listen":      "127.0.0.1",
+			"listen_port": 0,
 		}},
-		"outbounds": []map[string]any{{
-			"protocol": "vmess",
-			"settings": map[string]any{
-				"vnext": []map[string]any{{
-					"address": "127.0.0.1",
-					"port":    nodePort,
-					"users": []map[string]any{{
-						"id":       issue31UserUUID,
-						"alterId":  0,
-						"security": "auto",
-					}},
-				}},
-			},
-			"streamSettings": map[string]any{
-				"network":  "tcp",
-				"security": "none",
-			},
+		"outbounds": []M{{
+			"type":        "vmess",
+			"tag":         "vmess-tcp",
+			"server":      "127.0.0.1",
+			"server_port": nodePort,
+			"uuid":        issue31UserUUID,
+			"security":    "auto",
 		}},
+		"route": M{"final": "vmess-tcp"},
 	}
+}
+
+func issue31SOCKS5Dial(proxyAddr string, dest *net.TCPAddr) (net.Conn, error) {
+	conn, err := net.DialTimeout("tcp", proxyAddr, 2*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := conn.Write([]byte{5, 1, 0}); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	hello := make([]byte, 2)
+	if _, err := io.ReadFull(conn, hello); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	if hello[0] != 5 || hello[1] != 0 {
+		conn.Close()
+		return nil, fmt.Errorf("socks5 hello %v", hello)
+	}
+	ip := dest.IP.To4()
+	if ip == nil {
+		conn.Close()
+		return nil, fmt.Errorf("dest 不是 IPv4: %v", dest.IP)
+	}
+	req := []byte{5, 1, 0, 1, ip[0], ip[1], ip[2], ip[3], 0, 0}
+	binary.BigEndian.PutUint16(req[8:], uint16(dest.Port))
+	if _, err := conn.Write(req); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	reply := make([]byte, 10)
+	if _, err := io.ReadFull(conn, reply); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	if reply[1] != 0 {
+		conn.Close()
+		return nil, fmt.Errorf("socks5 connect status=%d", reply[1])
+	}
+	return conn, nil
+}
+
+func issue31WaitListen(addr string) error {
+	deadline := time.Now().Add(3 * time.Second)
+	var last error
+	for time.Now().Before(deadline) {
+		c, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
+		if err == nil {
+			c.Close()
+			return nil
+		}
+		last = err
+		time.Sleep(20 * time.Millisecond)
+	}
+	return fmt.Errorf("等不到 client listen %s: %v", addr, last)
 }
 
 func issue31WaitTCP(t *testing.T, addr string) {
