@@ -13,6 +13,9 @@
 # - testdata fixture：拿掉 -s -w 必須仍紅（回歸鎖）。不要為了紅去改 production。
 #
 # 不准改 production；不准 skip；不准擴大到壓 alpine／重寫多階段。
+#
+# 實作輪（df3c188）：只補 Makefile／Dockerfile -trimpath。TestIssue48_ 全綠。
+# 正式 make build-linux 證據見 issue48_formal_build_evidence.txt。
 
 ## 上下文（DDD）
 - 限界上下文：Node 發布產物（正式 Docker 映像／Makefile 發布二進位）

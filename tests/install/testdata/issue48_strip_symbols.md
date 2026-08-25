@@ -49,3 +49,13 @@
 - 失敗／回歸鎖：綠。現 tip 已有 `-s -w`；fixture 拿掉 `-s -w` 仍紅（testdata 寫明）
 - 詳見 `issue48_strip_symbols_go_test.txt`
 - 不准改 production；方向過再補 `-trimpath`（不要為了紅去改 production）
+
+## 實作輪（方向過後只補 -trimpath）
+
+基底：`cursor/strip-go-binary-symbols-de05` tip `df3c188`（base `dev` `c95a5da`）
+
+- 生產檔只改 `Makefile`／`Dockerfile`：正式 `go build` 加 `-trimpath`，與既有 `-ldflags "-s -w"` 並存
+- 不改 alpine、不重寫多階段、不改 `test`／debug build、不改 CI workflow（workflow 只呼叫 make／Dockerfile）
+- `go test ./tests/install -count=1 -timeout 30s -run 'TestIssue48_'`：**全綠**（Happy／邊界／-s -w 回歸鎖）
+- 正式 `make build-linux`：展開指令含 `-trimpath -ldflags "-s -w ..."`；`go version -m` 見 `-trimpath=true`；`file` 標 stripped；對照未 strip 約小 28–31%
+- 詳見 `issue48_strip_symbols_impl_go_test.txt`、`issue48_formal_build_evidence.txt`
