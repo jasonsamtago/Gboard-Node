@@ -99,6 +99,7 @@ func (x *Xray) Protocols() []string {
 	return []string{
 		"vmess", "vless", "trojan", "shadowsocks",
 		"hysteria",
+		"dokodemo-door", "dokodemo",
 	}
 }
 
@@ -117,6 +118,9 @@ func (x *Xray) Protocols() []string {
 //	Phase 5 – RecycleOld: close old in background    (non-blocking)
 func (x *Xray) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls kernel.TLSCert) error {
 	// ── Phase 1: Build config (no shared state) ─────────────────────────
+	if err := validateDokodemoSpec(nodeConfig); err != nil {
+		return err
+	}
 	x.ensureGeoData(nodeConfig)
 
 	listenSpec, proxy, err := maybeStartFrontProxy(nodeConfig)

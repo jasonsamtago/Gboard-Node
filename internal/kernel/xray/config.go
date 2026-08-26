@@ -2,9 +2,11 @@ package xray
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/jasonsamtago/Gboard-Node/internal/config"
@@ -214,6 +216,10 @@ func buildInbound(nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert)
 		},
 	}
 
+	if isDokodemoProtocol(nc.Protocol) {
+		return buildDokodemoDoor(base, nc)
+	}
+
 	switch nc.Protocol {
 	case "vmess":
 		return buildVMess(base, nc, users, tc)
@@ -231,6 +237,104 @@ func buildInbound(nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert)
 		return buildHysteria(base, nc, users, tc)
 	default:
 		return nil
+	}
+}
+
+func isDokodemoProtocol(protocol string) bool {
+	switch strings.ToLower(strings.TrimSpace(protocol)) {
+	case "dokodemo-door", "dokodemo":
+		return true
+	default:
+		return false
+	}
+}
+
+func validateDokodemoSpec(nc *model.NodeSpec) error {
+	if nc == nil || !isDokodemoProtocol(nc.Protocol) {
+		return nil
+	}
+	if dokodemoSettingString(nc.NetworkSettings, "address") == "" {
+		return fmt.Errorf("dokodemo-door inbound requires settings.address")
+	}
+	if dokodemoSettingInt(nc.NetworkSettings, "port") <= 0 {
+		return fmt.Errorf("dokodemo-door inbound requires settings.port")
+	}
+	return nil
+}
+
+func buildDokodemoDoor(base M, nc *model.NodeSpec) M {
+	base["protocol"] = "dokodemo-door"
+	base["tag"] = "dokodemo-door-in"
+	settings := M{}
+	if address := dokodemoSettingString(nc.NetworkSettings, "address"); address != "" {
+		settings["address"] = address
+	}
+	if port := dokodemoSettingInt(nc.NetworkSettings, "port"); port > 0 {
+		settings["port"] = port
+	}
+	if network := dokodemoSettingString(nc.NetworkSettings, "network"); network != "" {
+		settings["network"] = network
+	} else {
+		settings["network"] = "tcp,udp"
+	}
+	if timeout, ok := dokodemoSettingIntOk(nc.NetworkSettings, "timeout"); ok {
+		settings["timeout"] = timeout
+	}
+	base["settings"] = settings
+	return base
+}
+
+func dokodemoSettingString(settings map[string]any, key string) string {
+	if settings == nil {
+		return ""
+	}
+	v, ok := settings[key]
+	if !ok || v == nil {
+		return ""
+	}
+	s := strings.TrimSpace(fmt.Sprint(v))
+	if s == "<nil>" {
+		return ""
+	}
+	return s
+}
+
+func dokodemoSettingInt(settings map[string]any, key string) int {
+	n, _ := dokodemoSettingIntOk(settings, key)
+	return n
+}
+
+func dokodemoSettingIntOk(settings map[string]any, key string) (int, bool) {
+	if settings == nil {
+		return 0, false
+	}
+	v, ok := settings[key]
+	if !ok || v == nil {
+		return 0, false
+	}
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case float64:
+		return int(n), true
+	case json.Number:
+		i, err := n.Int64()
+		if err != nil {
+			return 0, false
+		}
+		return int(i), true
+	default:
+		s := strings.TrimSpace(fmt.Sprint(n))
+		if s == "" || s == "<nil>" {
+			return 0, false
+		}
+		i, err := strconv.Atoi(s)
+		if err != nil {
+			return 0, false
+		}
+		return i, true
 	}
 }
 
