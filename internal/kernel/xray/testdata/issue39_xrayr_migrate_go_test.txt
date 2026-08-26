@@ -1,0 +1,47 @@
+# 官方 cedar2025/Xboard-Node #39 — 本輪 TDD（不改 production）
+# 指令：go test ./internal/kernel/xray -count=1 -timeout 180s -run 'TestIssue39_'
+# 基底：dev tip bb7a3bd（已含 PR #38 merge）
+# 日期：2026-08-26
+#
+# 現況：buildInbound 無 case "dokodemo-door"，default 回 nil；
+# Protocols() 沒有 dokodemo；Start 成功、IsRunning=true、配置埠沒在聽。
+# geosite:youtube 已原樣進 routing.rules 且能起核（#20）。
+#
+# 預期：Happy A／別名／缺欄位紅；Happy B 與 vmess／vless 綠（回歸鎖）。
+
+--- FAIL: TestIssue39_DokodemoDoor_MustBuildListenAndForward
+    官方 #39：Protocols() 必須含 dokodemo-door（含別名），否則 validateNodeRuntime 會當不支援丟掉：
+        [vmess vless trojan shadowsocks hysteria]
+    官方 #39：buildConfig 必須帶 Dokodemo-Door inbound，不得因未知協議省略 inbounds（現況 buildInbound default 回 nil）
+    官方 #39：inbound.protocol 必須是 dokodemo-door，不得靜默忽略／當未知丟掉：
+        null
+    官方 #39：inbound.settings 必須帶 address/port/network/timeout
+        null
+    官方 #39：不得只印 WARN unsupported／no inbound 而不建 inbound
+        WARN xray: unsupported protocol, no inbound configured protocol=dokodemo-door
+        INFO xray started users=1 protocol=dokodemo-door
+    官方 #39：Start 後配置埠必須真在聽，不准 process 活著卻不建 inbound running=true
+        inbound=null
+
+--- FAIL: TestIssue39_DokodemoDoor_AliasesMustBuildInbound
+    --- FAIL: .../dokodemo-door
+    --- FAIL: .../Dokodemo-Door
+    --- FAIL: .../dokodemo
+        別名仍須產出 inbound protocol=dokodemo-door，不得丟掉／當未知忽略：null
+
+--- PASS: TestIssue39_GeositeYoutube_MustStayInRoutingAndStart
+    回歸鎖：domain:["geosite:youtube"] 原樣進 routing.rules，指向 outboundTag 宋仲基，#20 起核綠
+
+--- PASS: TestIssue39_VMessVLESS_MustNotRegress
+    --- PASS: TestIssue39_VMessVLESS_MustNotRegress/vless
+    --- PASS: TestIssue39_VMessVLESS_MustNotRegress/vmess
+
+--- FAIL: TestIssue39_DokodemoMissingAddressPort_MustErrorNotDrop
+    --- FAIL: .../缺_address
+    --- FAIL: .../缺_port
+        不准當 unsupported 丟 inbound（buildInbound default 回 nil）
+        缺 address／port 起核必須明示失敗，不得 Start 成功當空核 running=true inbound=null
+
+FAIL
+FAIL	github.com/jasonsamtago/Gboard-Node/internal/kernel/xray	4.087s
+FAIL

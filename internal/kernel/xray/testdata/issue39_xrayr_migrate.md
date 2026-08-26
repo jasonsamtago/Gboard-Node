@@ -50,6 +50,11 @@
 3. Happy B 若 #20 已覆蓋 geosite 原樣進 routing＋起核 → 回歸鎖綠，並在本檔註明
 4. 不准改 production、不准 skip、不准改切 sing-box、不准改 #20 下載路徑
 
-## 本輪實測（寫測後補）
+## 本輪實測（dev bb7a3bd，不改 production）
 
-見 `issue39_xrayr_migrate_note.txt`／`issue39_xrayr_migrate_go_test.txt`
+- Happy A（Dokodemo-Door）：**紅**。`Protocols()` 無 dokodemo；`buildInbound` 回 nil；`Start` 成功但不聽埠；只 WARN unsupported。
+- Happy B（`geosite:youtube`）：**回歸鎖綠**。官方形狀原樣進 `routing.rules` 並指向 `outboundTag`，#20 能起核。測仍會在拆掉 geosite／改 #20 路徑時紅。
+- 邊界：vmess／vless **綠**；`TestCustomRouteGeo_`（#20）**綠**。
+- 失敗（缺 address／port）：**紅**。當 unsupported 丟 inbound，Start 成功當空核。
+- 詳見 `issue39_xrayr_migrate_note.txt`／`issue39_xrayr_migrate_go_test.txt`
+- 建議：合測即可；審核2過方向後才寫 Dokodemo inbound。勿重做 #20、勿改切 sing-box。
