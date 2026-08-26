@@ -80,10 +80,34 @@ func buildConfig(kcfg config.KernelConfig, nc *model.NodeSpec, users []model.Use
 	}
 
 	// Merge panel routes and static config routes
-	cfg["routing"] = buildRouting(nc.Routes, nc.CustomRouteRules, mergeRouteList(nc.CustomRoutes, kcfg.CustomRoute))
+	routing := buildRouting(nc.Routes, nc.CustomRouteRules, mergeRouteList(nc.CustomRoutes, kcfg.CustomRoute))
+	if isDokodemoProtocol(nc.Protocol) {
+		routing = prependDokodemoDirectRoute(routing)
+	}
+	cfg["routing"] = routing
 
 	mergeCustomXray(cfg, kcfg)
 	return cfg
+}
+
+// prependDokodemoDirectRoute lets Dokodemo-Door traffic reach the configured
+// parent address:port. The default private-IP block would otherwise blackhole
+// 127.0.0.0/8 and RFC1918 parents (the usual XrayR 任意门 target).
+func prependDokodemoDirectRoute(routing M) M {
+	if routing == nil {
+		routing = M{}
+	}
+	rule := M{
+		"type":        "field",
+		"inboundTag":  []string{"dokodemo-door-in"},
+		"outboundTag": "direct",
+	}
+	if existing, ok := routing["rules"].([]M); ok {
+		routing["rules"] = append([]M{rule}, existing...)
+	} else {
+		routing["rules"] = []M{rule}
+	}
+	return routing
 }
 
 // outboundConfigToXray converts a structured OutboundConfig (from the panel)
