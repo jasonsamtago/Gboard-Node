@@ -1,8 +1,10 @@
 # Binaries
 /gboard-node
 /gboard-node-linux-*
+/gboard-node-freebsd-*
 /gbctl
 /gbctl-linux-*
+/gbctl-freebsd-*
 /xboard-node
 /xboard-node-linux-*
 /xbctl

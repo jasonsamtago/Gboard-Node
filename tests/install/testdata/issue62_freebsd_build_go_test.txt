@@ -1,0 +1,171 @@
+# 官方 cedar2025/Xboard-Node #62 — 審核2 ATDD 失敗測（不改 production）
+# 指令：go test ./tests/install -v -count=1 -timeout 60s -run 'TestIssue62_'
+# 基底：dev tip d15d962
+# 結果：Happy 紅。邊界綠。失敗鎖紅。fixture 綠。
+#
+# Happy 紅：無 make build-freebsd；uname=FreeBSD 仍拿 gboard-node-linux-amd64 並寫 systemd
+# 邊界綠：Linux 仍走 systemd＋*-linux-*
+# 失敗紅：未知 OS／缺 freebsd 成品都當 linux
+# 硬編碼：install.sh stage_binary → gboard-node-linux-${ARCH}；SERVICE_PATH systemd；無 rc.d
+
+======== issue62（對齊審核2 ATDD）========
+=== RUN   TestIssue62_MakeBuildFreeBSDProducesFreeBSDArtifact
+    freebsd_build_test.go:34: 官方 #62 Happy：必須有 make build-freebsd，產出 gboard-node-freebsd-${ARCH}（GOOS=freebsd）。現況只有 build-linux*：
+        make: *** No rule to make target 'build-freebsd'.  Stop.
+        
+        err=exit status 2
+--- FAIL: TestIssue62_MakeBuildFreeBSDProducesFreeBSDArtifact (0.01s)
+=== RUN   TestIssue62_InstallShOnFreeBSDTakesArtifactAndWritesRcd
+    freebsd_build_test.go:43: 官方 #62 happy 鎖定測失敗（現況 Happy／失敗應紅；或 build-freebsd／rc.d／明示失敗被拿掉）：
+        === ATDD-1 Happy: uname=FreeBSD 拿 gboard-node-freebsd-${ARCH} 並寫 rc.d ===
+        FAIL: install.sh 沒有 gboard-node-freebsd-${ARCH}（現況硬編碼 gboard-node-linux-${ARCH}）
+        FAIL: install.sh 沒有 rc.d（現況硬綁 systemd）
+        kind=linux service=systemd rc=0
+        urls=https://github.com/jasonsamtago/Gboard-Node/releases/download/dev/gboard-node-linux-amd64
+        out=[STEP] Downloading binary: https://github.com/jasonsamtago/Gboard-Node/releases/download/dev/gboard-node-linux-amd64
+        RESOLVE_DOWNLOAD_URL=https://github.com/jasonsamtago/Gboard-Node/releases/download/dev/gboard-node-linux-amd64
+        RESOLVE_ARCH=amd64
+        RESOLVE_OS=ubuntu
+        RESOLVE_SERVICE_PATH=/etc/systemd/system/gboard-node.service
+        RESOLVE_SERVICE_NAME=gboard-node.service
+        RESOLVE_FILE=gboard-node
+        RESOLVE_FILEBODY #!/usr/bin/env bash
+        RESOLVE_FILEBODY if [ "${1:-}" = "-v" ] || [ "${1:-}" = "version" ]; then
+        RESOLVE_FILEBODY     echo "gboard-node 0.0.0-issue62"
+        RESOLVE_FILEBODY     exit 0
+        RESOLVE_FILEBODY fi
+        RESOLVE_FILEBODY exit 0
+        RESOLVE_FILE=gboard-node.service
+        RESOLVE_FILEBODY [Unit]
+        RESOLVE_FILEBODY Description=Gboard Node Backend
+        RESOLVE_FILEBODY Documentation=https://github.com/jasonsamtago/Gboard-Node
+        RESOLVE_FILEBODY After=network-online.target
+        RESOLVE_FILEBODY Wants=network-online.target
+        RESOLVE_FILEBODY 
+        RESOLVE_FILEBODY [Service]
+        RESOLVE_FILEBODY Type=simple
+        RESOLVE_FILEBODY WorkingDirectory=/etc/gboard-node
+        RESOLVE_FILEBODY EnvironmentFile=-/etc/gboard-node/credentials.env
+        RESOLVE_FILEBODY ExecStart=/usr/local/bin/gboard-node -c /etc/gboard-node/config.yml
+        RESOLVE_FILEBODY Restart=always
+        RESOLVE_FILEBODY RestartSec=5
+        RESOLVE_FILEBODY LimitNOFILE=1048576
+        RESOLVE_FILEBODY NoNewPrivileges=true
+        RESOLVE_FILEBODY StandardOutput=journal
+        RESOLVE_FILEBODY StandardError=journal
+        RESOLVE_FILEBODY 
+        RESOLVE_FILEBODY [Install]
+        RESOLVE_FILEBODY WantedBy=multi-user.target
+        FAIL: uname=FreeBSD 必須拿 gboard-node-freebsd-${ARCH}，不得當 linux（kind=linux urls=https://github.com/jasonsamtago/Gboard-Node/releases/download/dev/gboard-node-linux-amd64）
+        FAIL: uname=FreeBSD 必須寫 rc.d，不是 systemd（service=systemd path 見 out）
+        
+        issue62 summary: PASS=0 FAIL=4
+        
+        err=exit status 1
+--- FAIL: TestIssue62_InstallShOnFreeBSDTakesArtifactAndWritesRcd (0.06s)
+=== RUN   TestIssue62_LinuxStillSystemdAndLinuxArtifact
+    freebsd_build_test.go:47: === ATDD-2 邊界: Linux 仍走 systemd＋*-linux-* ===
+        PASS: install.sh 仍有 *-linux-*
+        PASS: install.sh 仍有 systemd
+        linux kind=linux service=systemd rc=0
+        linux urls=https://github.com/jasonsamtago/Gboard-Node/releases/download/dev/gboard-node-linux-amd64
+        PASS: uname=Linux 仍拿 *-linux-*
+        PASS: uname=Linux 仍走 systemd
+        
+        issue62 summary: PASS=4 FAIL=0
+--- PASS: TestIssue62_LinuxStillSystemdAndLinuxArtifact (0.07s)
+=== RUN   TestIssue62_UnknownOSOrMissingFreeBSDMustExplicitFail
+    freebsd_build_test.go:51: 官方 #62 fail 鎖定測失敗（現況 Happy／失敗應紅；或 build-freebsd／rc.d／明示失敗被拿掉）：
+        === ATDD-3 失敗: 未知 OS／缺 freebsd 成品必須明示失敗，不准當 linux ===
+        unknown kind=linux rc=0 urls=https://github.com/jasonsamtago/Gboard-Node/releases/download/dev/gboard-node-linux-amd64
+        unknown out=[STEP] Downloading binary: https://github.com/jasonsamtago/Gboard-Node/releases/download/dev/gboard-node-linux-amd64
+        RESOLVE_DOWNLOAD_URL=https://github.com/jasonsamtago/Gboard-Node/releases/download/dev/gboard-node-linux-amd64
+        RESOLVE_ARCH=amd64
+        RESOLVE_OS=ubuntu
+        RESOLVE_SERVICE_PATH=/etc/systemd/system/gboard-node.service
+        RESOLVE_SERVICE_NAME=gboard-node.service
+        RESOLVE_FILE=gboard-node
+        RESOLVE_FILEBODY #!/usr/bin/env bash
+        RESOLVE_FILEBODY if [ "${1:-}" = "-v" ] || [ "${1:-}" = "version" ]; then
+        RESOLVE_FILEBODY     echo "gboard-node 0.0.0-issue62"
+        RESOLVE_FILEBODY     exit 0
+        RESOLVE_FILEBODY fi
+        RESOLVE_FILEBODY exit 0
+        RESOLVE_FILE=gboard-node.service
+        RESOLVE_FILEBODY [Unit]
+        RESOLVE_FILEBODY Description=Gboard Node Backend
+        RESOLVE_FILEBODY Documentation=https://github.com/jasonsamtago/Gboard-Node
+        RESOLVE_FILEBODY After=network-online.target
+        RESOLVE_FILEBODY Wants=network-online.target
+        RESOLVE_FILEBODY 
+        RESOLVE_FILEBODY [Service]
+        RESOLVE_FILEBODY Type=simple
+        RESOLVE_FILEBODY WorkingDirectory=/etc/gboard-node
+        RESOLVE_FILEBODY EnvironmentFile=-/etc/gboard-node/credentials.env
+        RESOLVE_FILEBODY ExecStart=/usr/local/bin/gboard-node -c /etc/gboard-node/config.yml
+        RESOLVE_FILEBODY Restart=always
+        RESOLVE_FILEBODY RestartSec=5
+        RESOLVE_FILEBODY LimitNOFILE=1048576
+        RESOLVE_FILEBODY NoNewPrivileges=true
+        RESOLVE_FILEBODY StandardOutput=journal
+        RESOLVE_FILEBODY StandardError=journal
+        RESOLVE_FILEBODY 
+        RESOLVE_FILEBODY [Install]
+        RESOLVE_FILEBODY WantedBy=multi-user.target
+        FAIL: 未知 OS 被當 linux（靜默拿 gboard-node-linux-${ARCH}）。urls=https://github.com/jasonsamtago/Gboard-Node/releases/download/dev/gboard-node-linux-amd64
+        missing kind=linux rc=0 urls=https://github.com/jasonsamtago/Gboard-Node/releases/download/dev/gboard-node-linux-amd64
+        missing out=[STEP] Downloading binary: https://github.com/jasonsamtago/Gboard-Node/releases/download/dev/gboard-node-linux-amd64
+        RESOLVE_DOWNLOAD_URL=https://github.com/jasonsamtago/Gboard-Node/releases/download/dev/gboard-node-linux-amd64
+        RESOLVE_ARCH=amd64
+        RESOLVE_OS=ubuntu
+        RESOLVE_SERVICE_PATH=/etc/systemd/system/gboard-node.service
+        RESOLVE_SERVICE_NAME=gboard-node.service
+        RESOLVE_FILE=gboard-node
+        RESOLVE_FILEBODY #!/usr/bin/env bash
+        RESOLVE_FILEBODY if [ "${1:-}" = "-v" ] || [ "${1:-}" = "version" ]; then
+        RESOLVE_FILEBODY     echo "gboard-node 0.0.0-issue62"
+        RESOLVE_FILEBODY     exit 0
+        RESOLVE_FILEBODY fi
+        RESOLVE_FILEBODY exit 0
+        RESOLVE_FILE=gboard-node.service
+        RESOLVE_FILEBODY [Unit]
+        RESOLVE_FILEBODY Description=Gboard Node Backend
+        RESOLVE_FILEBODY Documentation=https://github.com/jasonsamtago/Gboard-Node
+        RESOLVE_FILEBODY After=network-online.target
+        RESOLVE_FILEBODY Wants=network-online.target
+        RESOLVE_FILEBODY 
+        RESOLVE_FILEBODY [Service]
+        RESOLVE_FILEBODY Type=simple
+        RESOLVE_FILEBODY WorkingDirectory=/etc/gboard-node
+        RESOLVE_FILEBODY EnvironmentFile=-/etc/gboard-node/credentials.env
+        RESOLVE_FILEBODY ExecStart=/usr/local/bin/gboard-node -c /etc/gboard-node/config.yml
+        RESOLVE_FILEBODY Restart=always
+        RESOLVE_FILEBODY RestartSec=5
+        RESOLVE_FILEBODY LimitNOFILE=1048576
+        RESOLVE_FILEBODY NoNewPrivileges=true
+        RESOLVE_FILEBODY StandardOutput=journal
+        RESOLVE_FILEBODY StandardError=journal
+        RESOLVE_FILEBODY 
+        RESOLVE_FILEBODY [Install]
+        RESOLVE_FILEBODY WantedBy=multi-user.target
+        FAIL: 缺 freebsd 成品卻當 linux（靜默改拿 gboard-node-linux-${ARCH}）。urls=https://github.com/jasonsamtago/Gboard-Node/releases/download/dev/gboard-node-linux-amd64
+        
+        issue62 summary: PASS=0 FAIL=2
+        
+        err=exit status 1
+--- FAIL: TestIssue62_UnknownOSOrMissingFreeBSDMustExplicitFail (0.13s)
+=== RUN   TestIssue62_ATDDFixtures
+    freebsd_build_test.go:72: === fixture 契約: ATDD 檔名／rc.d／明示失敗 ===
+        PASS: 反例：硬編碼 linux＋systemd 被辨識
+        PASS: 反例：未知 OS 當 linux 被辨識
+        PASS: 反例：缺 freebsd 成品改拿 linux 被辨識
+        PASS: 正例：FreeBSD → gboard-node-freebsd-${ARCH}＋rc.d
+        PASS: 正例：Linux → systemd＋*-linux-*
+        PASS: 正例：未知 OS 明示失敗
+        PASS: 正例：缺 freebsd 成品明示失敗
+        
+        issue62 summary: PASS=7 FAIL=0
+--- PASS: TestIssue62_ATDDFixtures (0.41s)
+FAIL
+FAIL	github.com/jasonsamtago/Gboard-Node/tests/install	0.685s
+FAIL

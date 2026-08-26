@@ -360,15 +360,31 @@ detect_arch() {
 }
 
 detect_os() {
-    if [ -f /etc/os-release ]; then
-        . /etc/os-release
-        OS="$ID"
-    else
-        OS="unknown"
-    fi
+    local kernel
+    kernel="$(uname -s)"
+    case "$kernel" in
+        FreeBSD|freebsd)
+            OS="freebsd"
+            ;;
+        Linux|linux)
+            if [ -f /etc/os-release ]; then
+                . /etc/os-release
+                OS="$ID"
+            else
+                OS="linux"
+            fi
+            ;;
+        *)
+            log_error "Unsupported OS: ${kernel} (will not treat as linux)"
+            exit 1
+            ;;
+    esac
 }
 
 ensure_systemd() {
+    if [ "${OS:-}" = "freebsd" ]; then
+        return 0
+    fi
     if ! command -v systemctl >/dev/null 2>&1; then
         log_error "systemd is required for this installer"
         exit 1
@@ -472,6 +488,27 @@ migrate_legacy_layout() {
     elif [ -d "$INSTALL_ROOT" ]; then
         rewrite_legacy_paths_in_tree "$INSTALL_ROOT"
     fi
+}
+
+write_rcd_script() {
+    local dest="$1"
+    cat >"$dest" <<EOF_RCD
+#!/bin/sh
+#
+# PROVIDE: gboard_node
+# REQUIRE: NETWORKING
+# KEYWORD: shutdown
+
+. /etc/rc.subr
+
+name="gboard_node"
+rcvar="gboard_node_enable"
+command="${BINARY_PATH}"
+command_args="-c ${CONFIG_FILE}"
+
+load_rc_config \$name
+run_rc_command "\$1"
+EOF_RCD
 }
 
 write_service_unit() {
@@ -656,6 +693,14 @@ select_binary_source() {
         echo "./gboard-node"
         return
     fi
+    if [ "${OS:-}" = "freebsd" ]; then
+        if [ -f "./gboard-node-freebsd-${ARCH}" ]; then
+            echo "./gboard-node-freebsd-${ARCH}"
+            return
+        fi
+        echo ""
+        return
+    fi
     if [ -f "./gboard-node-linux-${ARCH}" ]; then
         echo "./gboard-node-linux-${ARCH}"
         return
@@ -689,7 +734,11 @@ stage_binary() {
         log_step "Using local binary: ${local_src}"
         cp "$local_src" "$staged"
     else
-        resolve_download_url "gboard-node-linux-${ARCH}"
+        if [ "${OS:-}" = "freebsd" ]; then
+            resolve_download_url "gboard-node-freebsd-${ARCH}"
+        else
+            resolve_download_url "gboard-node-linux-${ARCH}"
+        fi
         log_step "Downloading binary: ${DOWNLOAD_URL}"
         if ! curl -fsSL "$DOWNLOAD_URL" -o "$staged"; then
             log_error "Failed to download binary from ${DOWNLOAD_URL}"
@@ -714,18 +763,24 @@ stage_gbctl() {
         local_src="$CLI_BINARY_SOURCE"
     elif [ -f "./gbctl" ]; then
         local_src="./gbctl"
-    elif [ -f "./gbctl-linux-${ARCH}" ]; then
+    elif [ "${OS:-}" = "freebsd" ] && [ -f "./gbctl-freebsd-${ARCH}" ]; then
+        local_src="./gbctl-freebsd-${ARCH}"
+    elif [ "${OS:-}" != "freebsd" ] && [ -f "./gbctl-linux-${ARCH}" ]; then
         local_src="./gbctl-linux-${ARCH}"
-    elif [ -f "./xbctl" ]; then
+    elif [ "${OS:-}" != "freebsd" ] && [ -f "./xbctl" ]; then
         local_src="./xbctl"
-    elif [ -f "./xbctl-linux-${ARCH}" ]; then
+    elif [ "${OS:-}" != "freebsd" ] && [ -f "./xbctl-linux-${ARCH}" ]; then
         local_src="./xbctl-linux-${ARCH}"
     fi
     if [ -n "$local_src" ]; then
         log_step "Using local gbctl binary: ${local_src}"
         cp "$local_src" "$staged"
     else
-        resolve_download_url "gbctl-linux-${ARCH}"
+        if [ "${OS:-}" = "freebsd" ]; then
+            resolve_download_url "gbctl-freebsd-${ARCH}"
+        else
+            resolve_download_url "gbctl-linux-${ARCH}"
+        fi
         log_step "Downloading gbctl: ${DOWNLOAD_URL}"
         if ! curl -fsSL "$DOWNLOAD_URL" -o "$staged"; then
             log_error "Failed to download gbctl from ${DOWNLOAD_URL}"
@@ -785,6 +840,12 @@ render_config() {
 }
 
 render_service() {
+    if [ "${OS:-}" = "freebsd" ]; then
+        SERVICE_NAME="gboard-node"
+        SERVICE_PATH="/usr/local/etc/rc.d/gboard-node"
+        write_rcd_script "${TMP_DIR}/gboard-node.rcd"
+        return
+    fi
     write_service_unit "$TMP_DIR/${SERVICE_NAME}"
 }
 
