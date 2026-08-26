@@ -57,4 +57,9 @@
 - 邊界：vmess／vless **綠**；`TestCustomRouteGeo_`（#20）**綠**。
 - 失敗（缺 address／port）：**紅**。當 unsupported 丟 inbound，Start 成功當空核。
 - 詳見 `issue39_xrayr_migrate_note.txt`／`issue39_xrayr_migrate_go_test.txt`
-- 建議：合測即可；審核2過方向後才寫 Dokodemo inbound。勿重做 #20、勿改切 sing-box。
+
+## 最少實現後（審核2方向過）
+
+- Happy A／別名／缺欄位：**紅→綠**。TCP／UDP 皆 `dokodemo-door-in -> direct`。
+- Happy B、vmess／vless、#20 geo：**維持綠**。
+- 詳見 `issue39_xrayr_migrate_impl_note.txt`／`issue39_xrayr_migrate_impl_go_test.txt`
