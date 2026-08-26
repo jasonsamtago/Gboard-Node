@@ -1,0 +1,26 @@
+# 官方 cedar2025/Xboard-Node #39 — 最少實現後全綠
+# 指令：go test ./internal/kernel/xray -count=1 -timeout 180s -run 'TestIssue39_|TestCustomRouteGeo_|TestBuildRouting_'
+# 基底：本分支實作後（base dev bb7a3bd）
+# 日期：2026-08-26
+#
+# Happy A／別名／缺欄位：紅→綠
+# Happy B geosite、vmess／vless、#20 geo：維持綠
+
+--- PASS: TestIssue39_DokodemoDoor_MustBuildListenAndForward
+    tcp:127.0.0.1 [dokodemo-door-in -> direct]
+    udp:127.0.0.1 [dokodemo-door-in -> direct]
+--- PASS: TestIssue39_DokodemoDoor_AliasesMustBuildInbound
+    --- PASS: .../dokodemo-door
+    --- PASS: .../Dokodemo-Door
+    --- PASS: .../dokodemo
+--- PASS: TestIssue39_GeositeYoutube_MustStayInRoutingAndStart
+--- PASS: TestIssue39_VMessVLESS_MustNotRegress
+    --- PASS: .../vless
+    --- PASS: .../vmess
+--- PASS: TestIssue39_DokodemoMissingAddressPort_MustErrorNotDrop
+    --- PASS: .../缺_address
+    --- PASS: .../缺_port
+--- PASS: TestCustomRouteGeo_*
+--- PASS: TestBuildRouting_*
+
+ok  	github.com/jasonsamtago/Gboard-Node/internal/kernel/xray	1.103s

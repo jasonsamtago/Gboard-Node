@@ -1,0 +1,22 @@
+# 官方 cedar2025/Xboard-Node #39 — 本輪 TDD（不改 production）
+# 指令：
+#   go test ./internal/kernel/xray -count=1 -timeout 180s -run 'TestIssue39_'
+# 基底：dev tip bb7a3bd（已含 PR #38 merge）
+# 日期：2026-08-26
+#
+# 結果：Happy A 紅；Happy B 綠（回歸鎖）；邊界綠；缺欄位失敗鎖紅。
+#
+# 以碼為準（不是修補）：
+# - Protocols() 無 dokodemo-door
+# - buildInbound default 回 nil；buildConfig 省略 inbounds，只 WARN unsupported
+# - Start 成功、IsRunning=true、配置埠沒在聽
+# - 缺 address／port 同樣當未知協議丟 inbound，Start 成功當空核
+# - custom_routes domain:["geosite:youtube"] 已原樣進 routing.rules，#20 能起核
+#   → Happy B 現況已綠、當回歸鎖；測仍會在拆掉 geosite／改 #20 路徑時紅
+#
+# 不准改 production。審核2過方向後才寫 Dokodemo inbound。
+
+Happy A（Dokodemo-Door 聽埠＋轉發）：紅
+Happy B（geosite:youtube 原樣進 routing＋起核）：回歸鎖綠
+邊界（vmess／vless、#20 geo）：綠
+失敗（缺 address／port）：紅

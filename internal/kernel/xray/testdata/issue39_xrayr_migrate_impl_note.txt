@@ -1,0 +1,13 @@
+# 官方 cedar2025/Xboard-Node #39 — 最少實現後全綠
+# 日期：2026-08-26
+#
+# 實作（只動 Xray production）：
+# - Protocols() 加入 dokodemo-door／dokodemo
+# - buildInbound 認別名，寫 protocol=dokodemo-door 與
+#   settings.address/port/network/timeout
+# - Start 前缺 address／port 明示失敗
+# - dokodemo-door-in 流量先走 direct，不被私網 block 擋父節點
+#
+# 沒動：#20 geodata／geo.go、vmess／vless 建置、sing-box、WARP／DNS、install
+#
+# TestIssue39_* 全 PASS。Happy A／別名／缺欄位紅→綠；Happy B 與 vmess／vless 不回歸。
