@@ -59,9 +59,13 @@ type Service struct {
 	pullBackoff    apiBackoff // backoff for panel pull failures
 	pushBackoff    apiBackoff // backoff for panel push failures
 
-	// pushActive prevents overlapping push/pull goroutines.
-	pushActive atomic.Bool
-	pullActive atomic.Bool
+	// pushActive observes an admitted asynchronous report through completion.
+	pushActive      atomic.Bool
+	pullActive      atomic.Bool
+	reportMu        sync.Mutex
+	reportStopping  atomic.Bool
+	finalReportOnce sync.Once
+	finalReportErr  error
 	// pullResults delivers async pullViaAPI results back to the main goroutine.
 	pullResults chan pullResult
 
@@ -211,8 +215,7 @@ func (s *Service) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			s.pushReportSync()
-			return nil
+			return s.pushReportSync()
 
 		case <-trackTicker.C:
 			s.trackAndEnforce(ctx)
@@ -991,64 +994,6 @@ func (s *Service) trackAndEnforce(ctx context.Context) {
 		} else {
 			nlog.TrackerStats(connCount, len(traffic))
 		}
-	}
-}
-
-// pushReportAsync sends the report in a background goroutine so the select
-// loop is never blocked by slow HTTP. Only one push runs at a time.
-func (s *Service) pushReportAsync() {
-	if !s.sink.SupportsReporting() {
-		return
-	}
-	if !s.pushActive.CompareAndSwap(false, true) {
-		nlog.Core().Debug("push already in progress, skipping")
-		return
-	}
-	if s.pushBackoff.shouldSkip() {
-		nlog.Core().Debug("skipping report due to backoff")
-		s.pushActive.Store(false)
-		return
-	}
-
-	traffic := s.tracker.FlushTraffic()
-	aliveIPs := s.tracker.FlushAliveIPs()
-	online := s.tracker.CurrentOnline()
-	status := monitor.Collect()
-	metrics := s.buildMetrics(status)
-	metrics["kernel_status"] = s.kernel.IsRunning()
-
-	go func() {
-		defer s.pushActive.Store(false)
-		if err := s.sink.Report(controlplane.ReportPayload{Traffic: traffic, Alive: aliveIPs, Online: online, CPU: status.CPU, Mem: [2]uint64{status.MemTotal, status.MemUsed}, Swap: [2]uint64{status.SwapTotal, status.SwapUsed}, Disk: [2]uint64{status.DiskTotal, status.DiskUsed}, Metrics: metrics}); err != nil {
-			nlog.Core().Warn("failed to push report", "error", err)
-			if len(traffic) > 0 {
-				s.tracker.RestoreTraffic(traffic)
-			}
-			if len(aliveIPs) > 0 {
-				s.tracker.RestoreAliveIPs(aliveIPs)
-			}
-			s.pushBackoff.onFailure()
-			return
-		}
-		s.pushBackoff.onSuccess()
-		nlog.ReportPushed(len(traffic), len(online))
-	}()
-}
-
-// pushReportSync is used only during shutdown to ensure final data is sent.
-func (s *Service) pushReportSync() {
-	if !s.sink.SupportsReporting() {
-		return
-	}
-	traffic := s.tracker.FlushTraffic()
-	aliveIPs := s.tracker.FlushAliveIPs()
-	online := s.tracker.CurrentOnline()
-	status := monitor.Collect()
-	metrics := s.buildMetrics(status)
-	metrics["kernel_status"] = s.kernel.IsRunning()
-
-	if err := s.sink.Report(controlplane.ReportPayload{Traffic: traffic, Alive: aliveIPs, Online: online, CPU: status.CPU, Mem: [2]uint64{status.MemTotal, status.MemUsed}, Swap: [2]uint64{status.SwapTotal, status.SwapUsed}, Disk: [2]uint64{status.DiskTotal, status.DiskUsed}, Metrics: metrics}); err != nil {
-		nlog.Core().Warn("failed to push final report", "error", err)
 	}
 }
 
