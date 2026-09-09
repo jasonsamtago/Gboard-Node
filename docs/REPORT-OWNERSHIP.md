@@ -20,11 +20,13 @@ keeps `pushActive` set and retains the mutex until delivery, restoration,
 backoff, and logging are complete. Final reporting sets the stopping flag before
 waiting for that mutex, preventing any later periodic extraction.
 
-Final report errors flow through the command's existing first-error exit path.
+For direct legacy node services, final report errors reach the command's
+existing first-error exit decision. Machine child service failures retain the
+orchestrator's existing log-only handling and do not become its Run error.
 Because one configured instance can expand into several node services, the
-error channel now retains only the first error with a nonblocking send and then
-cancels the run. Machine and node workers keep their individual error logs, and
-every worker can finish cleanup even when several final reports fail together.
+command's error channel now retains only the first error with a nonblocking
+send and then cancels the run. Both command-level worker error sites keep their
+logs; a full error channel can no longer prevent worker completion.
 
 Failed traffic and the alive-IP retry request remain only in process memory.
 The final wait depends on `Sink.Report` returning; its existing HTTP timeout is
