@@ -45,6 +45,12 @@ Move pushReportAsync and pushReportSync to `internal/service/reporting.go`, toge
 
 `sendReport` calls Sink.Report exactly once. On error it restores nonempty Traffic with RestoreTraffic and requests a fresh alive snapshot through RestoreAliveIPs(payload.Alive), then returns the sink error; on success it does neither. There is no reporting capability/interface or panel payload schema change.
 
+### Command error fan-in required by final-error propagation
+
+Source review of `cmd/gboard-node/main.go:152-218` found errCh capacity is len(instances), but each legacy instance can ExpandNodes into more reporting services. Every service sends its error before completing its wait group, while the receiver waits for doneCh before reading errCh. More failing nodes than buffer slots can therefore block shutdown. Returning final report errors makes this path directly relevant to this change.
+
+Use `errCh := make(chan error, 1)` and one local `recordError := func(err error)` helper that nonblockingly attempts to send via select/case/default, then calls cancel regardless of whether the error fit. Both existing error sites (machine orchestrator and legacy node service) keep their per-error logging and call recordError in place of the blocking send plus cancel. The command already uses only the first error for its exit decision. Preserve channel closure/read after all workers complete, existing cleanup, reload behavior and startup staggering. Do not add a receiver goroutine or drop the existing logs. The helper retains the first failure while allowing every worker to finish even if many services fail together.
+
 ### Tracker alive snapshot ownership
 
 Remove the reusable aliveIPsBuf field and its constructor initialization. Keep lastAliveIPsHash; add `aliveIPsRetry bool` protected by Tracker.mu.
@@ -63,4 +69,4 @@ It does not fix final kernel-byte collection, core drain accounting, restart gen
 
 No tests, test files, test commands, probes, listeners, clients, traffic, packet captures, installations, dependency changes or deployment. Go 1.26 is this repository's declared minimum; the local Go1.26.3 is used, not Go1.20 from the separate shared library. Baseline offline `go build ./internal/service ./internal/tracker` passed before changes.
 
-Format changed Go files, run offline build/vet for affected packages, then offline `go build ./...` if cached dependencies allow. Environment: GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local GONOPROXY=none GOVCS=*:off. Inspect exact outputs/exit codes; missing cached dependencies are not passing evidence. Independent static task and whole-change review follow. Submit only an experimental draft PR after review, without merge/deployment or claims of reproduced/runtime-verified faults.
+Format changed Go files, run offline build/vet for `./internal/service ./internal/tracker ./cmd/gboard-node`, then offline `go build ./...` if cached dependencies allow. Environment: GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local GONOPROXY=none GOVCS=*:off. Inspect exact outputs/exit codes; missing cached dependencies are not passing evidence. Independent static task and whole-change review follow. Submit only an experimental draft PR after review, without merge/deployment or claims of reproduced/runtime-verified faults.
